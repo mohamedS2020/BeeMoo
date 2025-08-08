@@ -102,23 +102,24 @@ describe('App Class', () => {
       
       expect(mockAppElement.innerHTML).toContain('🎬 BeeMoo');
       expect(mockAppElement.innerHTML).toContain('Movie Party Meetings Platform');
+      expect(mockAppElement.innerHTML).toContain('Join or Create a Movie Party');
     });
 
     it('should show development info when in dev mode', () => {
       app.render();
       
       expect(mockAppElement.innerHTML).toContain('Development Mode');
-      expect(mockAppElement.innerHTML).toContain('🛠️ Development Tools');
+      expect(mockAppElement.innerHTML).toContain('🛠️ Development Info');
     });
 
-    it('should include status grid', () => {
+    it('should include landing page sections', () => {
       app.render();
       
-      expect(mockAppElement.innerHTML).toContain('status-grid');
-      expect(mockAppElement.innerHTML).toContain('✅ Frontend');
-      expect(mockAppElement.innerHTML).toContain('✅ Backend');
-      expect(mockAppElement.innerHTML).toContain('✅ CORS');
-      expect(mockAppElement.innerHTML).toContain('✅ WebSocket');
+      expect(mockAppElement.innerHTML).toContain('hero-section');
+      expect(mockAppElement.innerHTML).toContain('action-section');
+      expect(mockAppElement.innerHTML).toContain('features-section');
+      expect(mockAppElement.innerHTML).toContain('Create New Room');
+      expect(mockAppElement.innerHTML).toContain('Join Existing Room');
     });
 
     it('should handle missing app element', () => {
@@ -138,7 +139,7 @@ describe('App Class', () => {
       expect(mockAppElement.innerHTML).toContain('role="banner"');
       expect(mockAppElement.innerHTML).toContain('role="main"');
       expect(mockAppElement.innerHTML).toContain('id="main-content"');
-      expect(mockAppElement.innerHTML).toContain('aria-label="System Status Overview"');
+      expect(mockAppElement.innerHTML).toContain('aria-label="Room Actions"');
     });
   });
 
@@ -153,6 +154,37 @@ describe('App Class', () => {
   });
 
   describe('setupEventListeners()', () => {
+    beforeEach(() => {
+      app.render(); // Ensure buttons are in DOM for button tests
+    });
+
+    it('should set up room action button listeners', () => {
+      const createBtn = document.getElementById('create-room-btn');
+      const joinBtn = document.getElementById('join-room-btn');
+      
+      expect(createBtn).toBeDefined();
+      expect(joinBtn).toBeDefined();
+      
+      // Mock alert to avoid browser alert during tests (for join button)
+      global.alert = vi.fn();
+      
+      // Spy on roomCreation.show method to test create room button
+      const showSpy = vi.spyOn(app.roomCreation, 'show').mockImplementation(() => {});
+      
+      app.setupEventListeners();
+      
+      // Test create room button - should show modal
+      createBtn.click();
+      expect(showSpy).toHaveBeenCalled();
+      
+      // Test join room button - should still show alert (for now)
+      joinBtn.click();
+      expect(global.alert).toHaveBeenCalledWith('Join Room functionality will be implemented in Task 3.3');
+      
+      // Restore spy
+      showSpy.mockRestore();
+    });
+
     it('should set up ping test with delay', (done) => {
       const emitSpy = vi.spyOn(app.socketClient, 'emit');
       app.socketClient.isConnected = true;
@@ -195,6 +227,8 @@ describe('App Class', () => {
       
       expect(app.initialized).toBe(true);
       expect(mockAppElement.innerHTML).toContain('🎬 BeeMoo');
+      expect(mockAppElement.innerHTML).toContain('Create New Room');
+      expect(mockAppElement.innerHTML).toContain('Join Existing Room');
       expect(app.socketClient.connect).toHaveBeenCalled();
     });
   });

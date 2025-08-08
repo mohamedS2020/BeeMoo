@@ -68,23 +68,45 @@ if (NODE_ENV === 'development') {
   });
 }
 
+// Initialize Socket.io handlers
+const SocketHandlers = require('./socket/socketHandlers');
+const socketHandlers = new SocketHandlers(io);
+
 // Basic health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', service: 'BeeMoo Server' });
 });
 
-// Socket.io connection handling
-io.on('connection', (socket) => {
-  console.log(`🔌 User connected: ${socket.id}`);
-  
-  // Development ping handler
-  socket.on('ping', (data) => {
-    console.log('🏓 Ping received:', data);
-    socket.emit('pong', { message: 'Pong from BeeMoo server!', timestamp: Date.now() });
+// Server statistics endpoint (for monitoring/debugging)
+app.get('/api/stats', (req, res) => {
+  const stats = socketHandlers.getStats();
+  res.json({
+    status: 'OK',
+    service: 'BeeMoo Server',
+    timestamp: new Date().toISOString(),
+    stats: stats
   });
-  
-  socket.on('disconnect', () => {
-    console.log(`❌ User disconnected: ${socket.id}`);
+});
+
+// Socket.io connection handling
+io.on('connection', socketHandlers.handleConnection);
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\n🛑 Shutting down BeeMoo server...');
+  socketHandlers.shutdown();
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n🛑 Shutting down BeeMoo server...');
+  socketHandlers.shutdown();
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
   });
 });
 

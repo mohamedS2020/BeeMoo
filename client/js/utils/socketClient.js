@@ -79,4 +79,11 @@ export class SocketClient {
       this.socket.on(event, callback);
     }
   }
+
+  // Remove event listener
+  off(event, callback) {
+    if (this.socket) {
+      this.socket.off(event, callback);
+    }
+  }
 }
