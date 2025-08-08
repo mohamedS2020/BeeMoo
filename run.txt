@@ -1,0 +1,17 @@
+# Run both server & client together
+npm run dev
+
+# Individual commands
+npm run server:dev    # Backend server (port 3001)
+npm run client:dev    # Frontend dev server (port 3000)
+npm run server:start  # Production server
+npm run client:build  # Build frontend for production
+npm run dev          # Start both servers with colors
+npm run health       # Check server status  
+npm run install:all  # Install all dependencies
+
+# Install all dependencies
+npm run install:all
+
+# Run all tests
+npm test

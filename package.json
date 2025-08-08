@@ -1,0 +1,46 @@
+{
+  "name": "beemoo",
+  "version": "1.0.0",
+  "description": "BeeMoo - Movie party meetings platform with WebRTC and real-time synchronization",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently --names \"SERVER,CLIENT\" --prefix-colors \"blue,green\" \"npm run server:dev\" \"npm run client:dev\"",
+    "server:dev": "cd server && cross-env NODE_ENV=development npm run dev",
+    "client:dev": "cd client && npm run dev",
+    "server:start": "cd server && cross-env NODE_ENV=production npm start",
+    "client:build": "cd client && npm run build",
+    "client:preview": "cd client && npm run preview",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "test": "npm run server:test && npm run client:test",
+    "server:test": "cd server && npm test",
+    "client:test": "cd client && npm test",
+    "clean": "npm run clean:server && npm run clean:client",
+    "clean:server": "cd server && rm -rf node_modules dist",
+    "clean:client": "cd client && rm -rf node_modules dist",
+    "health": "curl http://localhost:3001/health || echo 'Server not running'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohamedS2020/BeeMoo.git"
+  },
+  "keywords": [
+    "webrtc",
+    "movie",
+    "streaming",
+    "websocket",
+    "signaling",
+    "beemoo",
+    "realtime"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/mohamedS2020/BeeMoo/issues"
+  },
+  "homepage": "https://github.com/mohamedS2020/BeeMoo#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "cross-env": "^10.0.0"
+  }
+}

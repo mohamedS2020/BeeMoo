@@ -1,0 +1,20 @@
+{
+  "watch": [
+    "server.js",
+    "socket/",
+    "models/",
+    "utils/"
+  ],
+  "ext": "js,json",
+  "ignore": [
+    "node_modules/",
+    "tests/"
+  ],
+  "env": {
+    "NODE_ENV": "development",
+    "PORT": "3001",
+    "CLIENT_URL": "http://localhost:3000"
+  },
+  "delay": 1000,
+  "verbose": true
+}
