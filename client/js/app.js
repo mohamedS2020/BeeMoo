@@ -3,6 +3,7 @@
 
 import { SocketClient } from './utils/socketClient.js';
 import { RoomCreation } from './components/RoomCreation.js';
+import { RoomJoining } from './components/RoomJoining.js';
 
 export class App {
   constructor() {
@@ -16,6 +17,10 @@ export class App {
     this.roomCreation = new RoomCreation(
       this.socketClient, 
       (roomData) => this.handleRoomCreated(roomData)
+    );
+    this.roomJoining = new RoomJoining(
+      this.socketClient,
+      (roomData) => this.handleRoomJoined(roomData)
     );
   }
 
@@ -188,9 +193,10 @@ export class App {
   }
 
   handleJoinRoom() {
-    // TODO: This will be implemented in Task 3.3
-    console.log('🚪 Join room clicked - will implement in Task 3.3');
-    alert('Join Room functionality will be implemented in Task 3.3');
+    console.log('🚪 Join room clicked');
+    
+    // Show room joining modal
+    this.roomJoining.show();
   }
 
   handleRoomCreated(roomData) {
@@ -202,6 +208,17 @@ export class App {
     // TODO: Navigate to room view (will be implemented in later tasks)
     // For now, show a success message
     alert(`Room created! Room code: ${roomData.roomCode}\n\nRoom view will be implemented in upcoming tasks.`);
+  }
+
+  handleRoomJoined(roomData) {
+    console.log('🎉 Room joined successfully:', roomData);
+    
+    // Store current room data
+    this.currentRoom = roomData;
+    
+    // TODO: Navigate to room view (will be implemented in later tasks)
+    // For now, show a success message
+    alert(`Joined room ${roomData.roomCode}!\n\nRoom view will be implemented in upcoming tasks.`);
   }
 
   // Utility method for future use

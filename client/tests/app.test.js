@@ -165,24 +165,23 @@ describe('App Class', () => {
       expect(createBtn).toBeDefined();
       expect(joinBtn).toBeDefined();
       
-      // Mock alert to avoid browser alert during tests (for join button)
-      global.alert = vi.fn();
-      
-      // Spy on roomCreation.show method to test create room button
-      const showSpy = vi.spyOn(app.roomCreation, 'show').mockImplementation(() => {});
+      // Spy on component show methods to test button clicks
+      const createShowSpy = vi.spyOn(app.roomCreation, 'show').mockImplementation(() => {});
+      const joinShowSpy = vi.spyOn(app.roomJoining, 'show').mockImplementation(() => {});
       
       app.setupEventListeners();
       
-      // Test create room button - should show modal
+      // Test create room button - should show creation modal
       createBtn.click();
-      expect(showSpy).toHaveBeenCalled();
+      expect(createShowSpy).toHaveBeenCalled();
       
-      // Test join room button - should still show alert (for now)
+      // Test join room button - should show joining modal
       joinBtn.click();
-      expect(global.alert).toHaveBeenCalledWith('Join Room functionality will be implemented in Task 3.3');
+      expect(joinShowSpy).toHaveBeenCalled();
       
-      // Restore spy
-      showSpy.mockRestore();
+      // Restore spies
+      createShowSpy.mockRestore();
+      joinShowSpy.mockRestore();
     });
 
     it('should set up ping test with delay', (done) => {

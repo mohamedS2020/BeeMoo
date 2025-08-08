@@ -876,6 +876,29 @@ header p {
   user-select: all;
 }
 
+/* Room Code Input (for joining) */
+.room-code-input {
+  font-family: 'Courier New', monospace !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.2em !important;
+  text-align: center !important;
+  font-size: 1.25rem !important;
+  text-transform: uppercase !important;
+}
+
+/* Inline room code display */
+.room-code-inline {
+  background: rgba(255, 215, 0, 0.15);
+  border: 1px solid rgba(255, 215, 0, 0.3);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  font-family: 'Courier New', monospace;
+  font-weight: 600;
+  color: #ffd700;
+  letter-spacing: 0.1em;
+  font-size: 0.9em;
+}
+
 /* Host Info */
 .host-info {
   background: rgba(255, 255, 255, 0.03);
@@ -899,6 +922,35 @@ header p {
 }
 
 .host-info li {
+  color: #cccccc;
+  font-size: 0.95rem;
+  margin: 0.5rem 0;
+  padding-left: 0.5rem;
+}
+
+/* Join Success Info */
+.join-success-info {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 215, 0, 0.2);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+}
+
+.join-success-info h4 {
+  color: #ffd700;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 1rem 0;
+}
+
+.join-success-info ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.join-success-info li {
   color: #cccccc;
   font-size: 0.95rem;
   margin: 0.5rem 0;
