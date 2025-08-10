@@ -81,15 +81,27 @@ describe('RoomJoining Component', () => {
       const roomCodeInput = document.getElementById('join-room-code-input');
       expect(roomCodeInput).toBeDefined();
     });
+
+    it('should render all three steps initially', () => {
+      roomJoining.show();
+      
+      expect(document.getElementById('room-code-step')).toBeDefined();
+      expect(document.getElementById('username-step')).toBeDefined();
+      expect(document.getElementById('success-step')).toBeDefined();
+      
+      // Only room code step should be active initially
+      expect(document.getElementById('room-code-step').classList.contains('active')).toBe(true);
+      expect(document.getElementById('username-step').classList.contains('active')).toBe(false);
+      expect(document.getElementById('success-step').classList.contains('active')).toBe(false);
+    });
   });
 
   describe('hide()', () => {
-    it('should hide modal and reset state', () => {
+    it('should hide modal and reset all state', () => {
       roomJoining.show();
       roomJoining.currentRoomCode = 'TEST01';
       roomJoining.isJoining = true;
-      
-      expect(roomJoining.isVisible).toBe(true);
+      roomJoining.isValidatingCode = true;
       
       roomJoining.hide();
       
@@ -97,6 +109,7 @@ describe('RoomJoining Component', () => {
       expect(roomJoining.modal).toBe(null);
       expect(roomJoining.currentRoomCode).toBe(null);
       expect(roomJoining.isJoining).toBe(false);
+      expect(roomJoining.isValidatingCode).toBe(false);
       expect(document.getElementById('room-joining-modal')).toBe(null);
     });
 
@@ -112,32 +125,32 @@ describe('RoomJoining Component', () => {
 
     it('should convert to uppercase', () => {
       const mockEvent = {
-        target: { value: 'test01' }
+        target: { value: 'abc123' }
       };
       
       roomJoining.formatRoomCode(mockEvent);
       
-      expect(mockEvent.target.value).toBe('TEST01');
+      expect(mockEvent.target.value).toBe('ABC123');
     });
 
     it('should remove invalid characters', () => {
       const mockEvent = {
-        target: { value: 'T@E#S$T%01' }
+        target: { value: 'a@b#c$1%2^3' }
       };
       
       roomJoining.formatRoomCode(mockEvent);
       
-      expect(mockEvent.target.value).toBe('TEST01');
+      expect(mockEvent.target.value).toBe('ABC123');
     });
 
     it('should limit to 6 characters', () => {
       const mockEvent = {
-        target: { value: 'TEST012345' }
+        target: { value: 'ABCDEFGHIJK' }
       };
       
       roomJoining.formatRoomCode(mockEvent);
       
-      expect(mockEvent.target.value).toBe('TEST01');
+      expect(mockEvent.target.value).toBe('ABCDEF');
     });
   });
 
@@ -148,7 +161,7 @@ describe('RoomJoining Component', () => {
 
     it('should accept valid room codes', () => {
       const mockEvent = {
-        target: { value: 'TEST01' }
+        target: { value: 'ABC123' }
       };
       
       roomJoining.validateRoomCodeInput(mockEvent);
@@ -159,24 +172,35 @@ describe('RoomJoining Component', () => {
 
     it('should reject room codes that are too short', () => {
       const mockEvent = {
-        target: { value: 'TEST' }
+        target: { value: 'ABC12' }
       };
       
       roomJoining.validateRoomCodeInput(mockEvent);
       
       const errorDiv = document.getElementById('room-code-error');
-      expect(errorDiv.textContent).toContain('6 characters');
+      expect(errorDiv.textContent).toContain('must be 6 characters');
     });
 
     it('should reject room codes with invalid characters', () => {
       const mockEvent = {
-        target: { value: 'TEST@1' }
+        target: { value: 'ABC@#$' }
       };
       
       roomJoining.validateRoomCodeInput(mockEvent);
       
       const errorDiv = document.getElementById('room-code-error');
-      expect(errorDiv.textContent).toContain('letters and numbers');
+      expect(errorDiv.textContent).toContain('can only contain letters and numbers');
+    });
+
+    it('should clear error for empty input', () => {
+      const mockEvent = {
+        target: { value: '' }
+      };
+      
+      roomJoining.validateRoomCodeInput(mockEvent);
+      
+      const errorDiv = document.getElementById('room-code-error');
+      expect(errorDiv.textContent).toBe('');
     });
   });
 
@@ -218,6 +242,17 @@ describe('RoomJoining Component', () => {
       expect(errorDiv.textContent).toContain('30 characters or less');
     });
 
+    it('should reject usernames with invalid characters', () => {
+      const mockEvent = {
+        target: { value: 'user@domain.com' }
+      };
+      
+      roomJoining.validateUsername(mockEvent);
+      
+      const errorDiv = document.getElementById('join-username-error');
+      expect(errorDiv.textContent).toContain('invalid characters');
+    });
+
     it('should reject reserved usernames', () => {
       const mockEvent = {
         target: { value: 'admin' }
@@ -256,13 +291,13 @@ describe('RoomJoining Component', () => {
       };
       
       const roomCodeInput = document.getElementById('join-room-code-input');
-      roomCodeInput.value = 'TEST';
+      roomCodeInput.value = 'ABC12';
       
       roomJoining.handleRoomCodeSubmit(mockEvent);
       
       expect(mockEvent.preventDefault).toHaveBeenCalled();
       const errorDiv = document.getElementById('room-code-error');
-      expect(errorDiv.textContent).toContain('6 characters');
+      expect(errorDiv.textContent).toContain('must be 6 characters');
     });
 
     it('should not submit if already validating', () => {
@@ -287,8 +322,7 @@ describe('RoomJoining Component', () => {
       
       // Mock validateRoomCode to return success
       const validateSpy = vi.spyOn(roomJoining, 'validateRoomCode').mockResolvedValue({
-        success: true,
-        room: {}
+        success: true
       });
       
       await roomJoining.handleRoomCodeSubmit(mockEvent);
@@ -308,7 +342,7 @@ describe('RoomJoining Component', () => {
       mockSocketClient.on.mockImplementation((event, callback) => {
         if (event === 'room-exists') {
           setTimeout(() => {
-            callback({ room: {} });
+            callback({ room: { roomCode: 'TEST01', hostUsername: 'Host' } });
           }, 10);
         }
       });
@@ -321,6 +355,7 @@ describe('RoomJoining Component', () => {
       
       const result = await promise;
       expect(result.success).toBe(true);
+      expect(result.room.roomCode).toBe('TEST01');
     });
 
     it('should handle room not found error', async () => {
@@ -340,12 +375,25 @@ describe('RoomJoining Component', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('Room not found');
     });
+
+    it('should handle timeout', async () => {
+      const roomCode = 'TIMEOUT';
+      
+      // Don't set up any socket response (will timeout)
+      mockSocketClient.on.mockImplementation(() => {});
+      
+      const result = await roomJoining.validateRoomCode(roomCode);
+      
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('timeout');
+    });
   });
 
   describe('handleUsernameSubmit()', () => {
     beforeEach(() => {
       roomJoining.show();
       roomJoining.currentRoomCode = 'TEST01';
+      roomJoining.showUsernameStep('TEST01');
     });
 
     it('should prevent submission if username is empty', () => {
@@ -353,7 +401,6 @@ describe('RoomJoining Component', () => {
         preventDefault: vi.fn()
       };
       
-      roomJoining.showUsernameStep('TEST01');
       const usernameInput = document.getElementById('join-username-input');
       usernameInput.value = '';
       
@@ -381,7 +428,6 @@ describe('RoomJoining Component', () => {
         preventDefault: vi.fn()
       };
       
-      roomJoining.showUsernameStep('TEST01');
       const usernameInput = document.getElementById('join-username-input');
       usernameInput.value = 'TestUser';
       
@@ -389,7 +435,7 @@ describe('RoomJoining Component', () => {
       const joinSpy = vi.spyOn(roomJoining, 'joinRoom').mockResolvedValue({
         success: true,
         room: {},
-        user: {}
+        participants: []
       });
       
       await roomJoining.handleUsernameSubmit(mockEvent);
@@ -410,7 +456,11 @@ describe('RoomJoining Component', () => {
       mockSocketClient.on.mockImplementation((event, callback) => {
         if (event === 'room-joined') {
           setTimeout(() => {
-            callback({ room: {}, user: {} });
+            callback({ 
+              room: { roomCode }, 
+              user: { username, isHost: false },
+              participants: []
+            });
           }, 10);
         }
       });
@@ -423,11 +473,13 @@ describe('RoomJoining Component', () => {
       
       const result = await promise;
       expect(result.success).toBe(true);
+      expect(result.room.roomCode).toBe(roomCode);
+      expect(result.user.username).toBe(username);
     });
 
     it('should handle join room error', async () => {
       const roomCode = 'TEST01';
-      const username = 'TakenUser';
+      const username = 'TestUser';
       
       // Set up socket to respond with error
       mockSocketClient.on.mockImplementation((event, callback) => {
@@ -460,13 +512,28 @@ describe('RoomJoining Component', () => {
       
       const usernameStep = document.getElementById('username-step');
       expect(usernameStep.classList.contains('active')).toBe(true);
+      
+      const roomCodeStep = document.getElementById('room-code-step');
+      expect(roomCodeStep.classList.contains('active')).toBe(false);
     });
 
-    it('should show success step with correct room code', () => {
+    it('should navigate back to room code step', () => {
+      roomJoining.showUsernameStep('TEST01');
+      expect(document.getElementById('username-step').classList.contains('active')).toBe(true);
+      
+      roomJoining.showRoomCodeStep();
+      
+      expect(document.getElementById('room-code-step').classList.contains('active')).toBe(true);
+      expect(document.getElementById('username-step').classList.contains('active')).toBe(false);
+    });
+
+    it('should show success step with join data', () => {
       const roomCode = 'TEST01';
       const username = 'TestUser';
+      const roomData = { hostUsername: 'Host' };
+      const participants = [{ username: 'Host' }, { username: 'TestUser' }];
       
-      roomJoining.showSuccessStep(roomCode, username, {});
+      roomJoining.showSuccessStep(roomCode, username, roomData, participants);
       
       const successRoomCode = document.getElementById('success-room-code');
       expect(successRoomCode.textContent).toBe(roomCode);
@@ -474,31 +541,31 @@ describe('RoomJoining Component', () => {
       const successStep = document.getElementById('success-step');
       expect(successStep.classList.contains('active')).toBe(true);
       
-      expect(roomJoining.joinedRoom).toEqual({ roomCode, username, room: {} });
-    });
-
-    it('should navigate back to room code step', () => {
-      roomJoining.showUsernameStep('TEST01');
-      
-      roomJoining.showRoomCodeStep();
-      
-      const roomCodeStep = document.getElementById('room-code-step');
-      expect(roomCodeStep.classList.contains('active')).toBe(true);
-      
-      const usernameStep = document.getElementById('username-step');
-      expect(usernameStep.classList.contains('active')).toBe(false);
+      expect(roomJoining.joinedRoom).toEqual({
+        roomCode, 
+        username, 
+        room: roomData, 
+        participants
+      });
     });
   });
 
   describe('handleJoinRoom()', () => {
     it('should hide modal and trigger callback', () => {
-      roomJoining.joinedRoom = { roomCode: 'TEST01', username: 'TestUser', room: {} };
+      const joinedRoom = {
+        roomCode: 'TEST01',
+        username: 'TestUser',
+        room: {},
+        participants: []
+      };
+      
+      roomJoining.joinedRoom = joinedRoom;
       const hideSpy = vi.spyOn(roomJoining, 'hide').mockImplementation(() => {});
       
       roomJoining.handleJoinRoom();
       
       expect(hideSpy).toHaveBeenCalled();
-      expect(mockCallback).toHaveBeenCalledWith({ roomCode: 'TEST01', username: 'TestUser', room: {} });
+      expect(mockCallback).toHaveBeenCalledWith(joinedRoom);
       
       hideSpy.mockRestore();
     });
@@ -533,6 +600,136 @@ describe('RoomJoining Component', () => {
       expect(button.disabled).toBe(false);
       expect(button.querySelector('.btn-text').style.display).toBe('inline');
       expect(button.querySelector('.btn-loader').style.display).toBe('none');
+    });
+  });
+
+  describe('Event Listeners', () => {
+    beforeEach(() => {
+      roomJoining.show();
+    });
+
+    it('should set up close button listeners', () => {
+      const closeBtn = document.getElementById('close-join-modal');
+      const cancelBtn = document.getElementById('cancel-join');
+      
+      expect(closeBtn).toBeDefined();
+      expect(cancelBtn).toBeDefined();
+      
+      const hideSpy = vi.spyOn(roomJoining, 'hide').mockImplementation(() => {});
+      
+      closeBtn.click();
+      expect(hideSpy).toHaveBeenCalledTimes(1);
+      
+      cancelBtn.click();
+      expect(hideSpy).toHaveBeenCalledTimes(2);
+      
+      hideSpy.mockRestore();
+    });
+
+    it('should close on overlay click', () => {
+      const modal = document.getElementById('room-joining-modal');
+      const hideSpy = vi.spyOn(roomJoining, 'hide').mockImplementation(() => {});
+      
+      // Simulate click on overlay (target is the modal itself)
+      const event = new MouseEvent('click', { bubbles: true });
+      Object.defineProperty(event, 'target', { value: modal });
+      modal.dispatchEvent(event);
+      
+      expect(hideSpy).toHaveBeenCalled();
+      
+      hideSpy.mockRestore();
+    });
+
+    it('should not close on content click', () => {
+      const modalContent = document.querySelector('.modal-content');
+      const hideSpy = vi.spyOn(roomJoining, 'hide').mockImplementation(() => {});
+      
+      // Simulate click on modal content
+      const event = new MouseEvent('click', { bubbles: true });
+      Object.defineProperty(event, 'target', { value: modalContent });
+      modalContent.dispatchEvent(event);
+      
+      expect(hideSpy).not.toHaveBeenCalled();
+      
+      hideSpy.mockRestore();
+    });
+
+    it('should close on ESC key', () => {
+      const hideSpy = vi.spyOn(roomJoining, 'hide').mockImplementation(() => {});
+      
+      const event = new KeyboardEvent('keydown', { key: 'Escape' });
+      document.dispatchEvent(event);
+      
+      expect(hideSpy).toHaveBeenCalled();
+      
+      hideSpy.mockRestore();
+    });
+  });
+
+  describe('Accessibility', () => {
+    beforeEach(() => {
+      roomJoining.show();
+    });
+
+    it('should announce room found to screen readers', () => {
+      const announcement = document.getElementById('announcements');
+      roomJoining.showUsernameStep('TEST01');
+      
+      expect(announcement.textContent).toContain('Room TEST01 found');
+    });
+
+    it('should announce successful join to screen readers', () => {
+      const announcement = document.getElementById('announcements');
+      roomJoining.showSuccessStep('TEST01', 'TestUser', {}, []);
+      
+      expect(announcement.textContent).toContain('Successfully joined room TEST01');
+    });
+
+    it('should have proper ARIA attributes', () => {
+      const modal = document.querySelector('.modal-content');
+      expect(modal.getAttribute('role')).toBe('dialog');
+      expect(modal.getAttribute('aria-modal')).toBe('true');
+      expect(modal.getAttribute('aria-labelledby')).toBe('join-room-title');
+    });
+  });
+
+  describe('Integration Flow', () => {
+    it('should complete full join flow', async () => {
+      // Step 1: Show modal
+      roomJoining.show();
+      expect(roomJoining.isVisible).toBe(true);
+      
+      // Step 2: Enter room code
+      const roomCodeInput = document.getElementById('join-room-code-input');
+      roomCodeInput.value = 'TEST01';
+      
+      // Mock room validation
+      const validateSpy = vi.spyOn(roomJoining, 'validateRoomCode').mockResolvedValue({
+        success: true,
+        room: { roomCode: 'TEST01' }
+      });
+      
+      const roomCodeForm = document.getElementById('room-code-form');
+      const event = new Event('submit');
+      await roomCodeForm.dispatchEvent(event);
+      
+      // Step 3: Enter username
+      const usernameInput = document.getElementById('join-username-input');
+      usernameInput.value = 'TestUser';
+      
+      // Mock room joining
+      const joinSpy = vi.spyOn(roomJoining, 'joinRoom').mockResolvedValue({
+        success: true,
+        room: { roomCode: 'TEST01' },
+        user: { username: 'TestUser' },
+        participants: []
+      });
+      
+      // Step 4: Complete join
+      expect(roomJoining.currentRoomCode).toBe('TEST01');
+      
+      validateSpy.mockRestore();
+      joinSpy.mockRestore();
     });
   });
 });

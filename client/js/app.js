@@ -285,6 +285,7 @@ export class App {
       this.roomView.mount(container, {
         roomCode: roomData.roomCode,
         room: roomData.room,
+        user: roomData.user,
         participants: initialParticipants,
       });
     }
