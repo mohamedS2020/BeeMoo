@@ -8,6 +8,7 @@ export class RoomCreation {
     this.isVisible = false;
     this.isCreating = false;
     this.modal = null;
+    this.focusTimeoutId = null;
     
     // Bind methods
     this.show = this.show.bind(this);
@@ -25,18 +26,25 @@ export class RoomCreation {
     this.setupEventListeners();
     
     // Focus on username input
-    setTimeout(() => {
-      const usernameInput = document.getElementById('create-username-input');
-      if (usernameInput) {
-        usernameInput.focus();
-      }
-    }, 100);
+    if (typeof document !== 'undefined') {
+      this.focusTimeoutId = setTimeout(() => {
+        if (!this.isVisible || typeof document === 'undefined') return;
+        const usernameInput = document.getElementById('create-username-input');
+        if (usernameInput) {
+          usernameInput.focus();
+        }
+      }, 100);
+    }
   }
 
   hide() {
     if (!this.isVisible) return;
     
     this.isVisible = false;
+    if (this.focusTimeoutId) {
+      clearTimeout(this.focusTimeoutId);
+      this.focusTimeoutId = null;
+    }
     if (this.modal) {
       this.modal.remove();
       this.modal = null;
@@ -262,6 +270,14 @@ export class RoomCreation {
       const result = await this.createRoom(username);
       
       if (result.success) {
+        // Persist full room data so the app can render the host in the participant list
+        this.createdRoom = {
+          roomCode: result.roomCode,
+          username,
+          room: result.room,
+          user: result.user,
+          participants: result.user ? [result.user] : []
+        };
         this.showRoomCodeStep(result.roomCode, username);
       } else {
         errorDiv.textContent = result.error || 'Failed to create room. Please try again.';
@@ -316,8 +332,8 @@ export class RoomCreation {
       roomCodeStep.classList.add('active');
       roomCodeText.textContent = roomCode;
       
-      // Store room data for joining
-      this.createdRoom = { roomCode, username };
+      // Store room data for joining (preserve previously captured room/user)
+      this.createdRoom = { ...(this.createdRoom || {}), roomCode, username };
       
       // Announce to screen readers
       const announcement = document.getElementById('announcements');
@@ -416,5 +432,9 @@ export class RoomCreation {
     this.hide();
     // Remove any remaining event listeners
     document.removeEventListener('keydown', this.handleEscKey);
+    if (this.focusTimeoutId) {
+      clearTimeout(this.focusTimeoutId);
+      this.focusTimeoutId = null;
+    }
   }
 }

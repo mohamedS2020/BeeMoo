@@ -406,7 +406,7 @@ export class RoomJoining {
       const result = await this.joinRoom(this.currentRoomCode, username);
       
       if (result.success) {
-        this.showSuccessStep(this.currentRoomCode, username, result.room);
+        this.showSuccessStep(this.currentRoomCode, username, result.room, result.participants);
       } else {
         errorDiv.textContent = result.error || 'Failed to join room. Please try again.';
       }
@@ -425,7 +425,7 @@ export class RoomJoining {
       const handleJoinSuccess = (data) => {
         this.socketClient.off('room-joined', handleJoinSuccess);
         this.socketClient.off('join-room-error', handleJoinError);
-        resolve({ success: true, room: data.room, user: data.user });
+        resolve({ success: true, room: data.room, user: data.user, participants: data.participants });
       };
 
       const handleJoinError = (data) => {
@@ -501,7 +501,7 @@ export class RoomJoining {
     }
   }
 
-  showSuccessStep(roomCode, username, roomData) {
+  showSuccessStep(roomCode, username, roomData, participants) {
     const usernameStep = document.getElementById('username-step');
     const successStep = document.getElementById('success-step');
     const successRoomCode = document.getElementById('success-room-code');
@@ -516,7 +516,7 @@ export class RoomJoining {
       }
       
       // Store join data for room entry
-      this.joinedRoom = { roomCode, username, room: roomData };
+      this.joinedRoom = { roomCode, username, room: roomData, participants };
       
       // Announce to screen readers
       const announcement = document.getElementById('announcements');

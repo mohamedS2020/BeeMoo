@@ -4,6 +4,7 @@
 import { SocketClient } from './utils/socketClient.js';
 import { RoomCreation } from './components/RoomCreation.js';
 import { RoomJoining } from './components/RoomJoining.js';
+import { RoomView } from './components/RoomView.js';
 
 export class App {
   constructor() {
@@ -22,6 +23,7 @@ export class App {
       this.socketClient,
       (roomData) => this.handleRoomJoined(roomData)
     );
+    this.roomView = new RoomView(this.socketClient);
   }
 
   init() {
@@ -50,13 +52,26 @@ export class App {
       <div class="beemoo-app">
         <header role="banner" class="main-header">
           <div class="header-content">
-            <h1 class="logo">🎬 BeeMoo</h1>
+            <div class="brand-row">
+              <h1 class="logo">🎬 BeeMoo</h1>
+              <button id="nav-toggle" class="nav-toggle" aria-label="Open menu" aria-controls="main-nav" aria-expanded="false">
+                <span class="nav-toggle-bar" aria-hidden="true"></span>
+                <span class="sr-only">Menu</span>
+              </button>
+            </div>
             <p class="tagline">Movie Party Meetings Platform</p>
             ${isDev ? `<div class="dev-info" role="status">
               <small>Development Mode</small>
               <div class="connection-status">🔄 Connecting...</div>
             </div>` : ''}
           </div>
+          <nav id="main-nav" class="main-nav" aria-label="Primary">
+            <ul>
+              <li><a href="#" id="nav-create">Create Room</a></li>
+              <li><a href="#" id="nav-join">Join Room</a></li>
+              <li><a href="#features" id="nav-features">Features</a></li>
+            </ul>
+          </nav>
         </header>
 
         <main id="main-content" role="main" class="landing-main">
@@ -176,6 +191,44 @@ export class App {
       joinRoomBtn.addEventListener('click', () => this.handleJoinRoom());
     }
 
+    // Mobile nav toggle
+    const navToggle = document.getElementById('nav-toggle');
+    const mainHeader = document.querySelector('.main-header');
+    const mainNav = document.getElementById('main-nav');
+
+    if (navToggle && mainHeader && mainNav) {
+      const closeNav = () => {
+        mainHeader.classList.remove('nav-open');
+        navToggle.setAttribute('aria-expanded', 'false');
+      };
+      const openNav = () => {
+        mainHeader.classList.add('nav-open');
+        navToggle.setAttribute('aria-expanded', 'true');
+      };
+      const toggleNav = () => {
+        if (mainHeader.classList.contains('nav-open')) {
+          closeNav();
+        } else {
+          openNav();
+        }
+      };
+      navToggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        toggleNav();
+      });
+      // Close on ESC
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeNav();
+      });
+      // Close on link click
+      mainNav.addEventListener('click', (e) => {
+        const target = e.target;
+        if (target.tagName === 'A') {
+          closeNav();
+        }
+      });
+    }
+
     // Test WebSocket connection with a simple ping
     setTimeout(() => {
       if (this.socketClient.isConnected) {
@@ -205,9 +258,8 @@ export class App {
     // Store current room data
     this.currentRoom = roomData;
     
-    // TODO: Navigate to room view (will be implemented in later tasks)
-    // For now, show a success message
-    alert(`Room created! Room code: ${roomData.roomCode}\n\nRoom view will be implemented in upcoming tasks.`);
+    // Navigate to room view scaffold
+    this.navigateToRoom(roomData);
   }
 
   handleRoomJoined(roomData) {
@@ -216,9 +268,26 @@ export class App {
     // Store current room data
     this.currentRoom = roomData;
     
-    // TODO: Navigate to room view (will be implemented in later tasks)
-    // For now, show a success message
-    alert(`Joined room ${roomData.roomCode}!\n\nRoom view will be implemented in upcoming tasks.`);
+    // Navigate to room view scaffold
+    this.navigateToRoom(roomData);
+  }
+
+  navigateToRoom(roomData) {
+    this.currentView = 'room';
+    // Render a minimal shell for room
+    if (this.appElement) {
+      this.appElement.innerHTML = '';
+      const container = document.createElement('div');
+      this.appElement.appendChild(container);
+      const initialParticipants = Array.isArray(roomData.participants) && roomData.participants.length > 0
+        ? roomData.participants
+        : (roomData.user ? [roomData.user] : []);
+      this.roomView.mount(container, {
+        roomCode: roomData.roomCode,
+        room: roomData.room,
+        participants: initialParticipants,
+      });
+    }
   }
 
   // Utility method for future use

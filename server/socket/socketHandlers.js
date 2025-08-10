@@ -26,11 +26,16 @@ class SocketHandlers {
 
     // Register event handlers
     socket.on('create-room', (data) => this.handleCreateRoom(socket, data));
+    socket.on('validate-room', (data) => this.handleValidateRoom(socket, data));
     socket.on('join-room', (data) => this.handleJoinRoom(socket, data));
     socket.on('leave-room', () => this.handleLeaveRoom(socket));
     socket.on('mic-toggle', (data) => this.handleMicToggle(socket, data));
     socket.on('movie-control', (data) => this.handleMovieControl(socket, data));
     socket.on('chat-message', (data) => this.handleChatMessage(socket, data));
+    // WebRTC signaling
+    socket.on('webrtc-offer', (data) => this.handleWebRTCOffer(socket, data));
+    socket.on('webrtc-answer', (data) => this.handleWebRTCAnswer(socket, data));
+    socket.on('webrtc-ice-candidate', (data) => this.handleWebRTCIceCandidate(socket, data));
     socket.on('ping', (data) => this.handlePing(socket, data));
     socket.on('disconnect', () => this.handleDisconnection(socket));
 
@@ -43,6 +48,31 @@ class SocketHandlers {
         features: ['rooms', 'voice', 'movies', 'chat']
       }
     });
+  }
+
+  /**
+   * Validate room existence
+   * @param {Socket} socket
+   * @param {object} data
+   */
+  handleValidateRoom(socket, data) {
+    try {
+      const { roomCode } = data || {};
+      if (!roomCode || typeof roomCode !== 'string') {
+        socket.emit('room-not-found', { error: 'Room code is required' });
+        return;
+      }
+
+      const room = this.roomManager.getRoom(roomCode.toUpperCase());
+      if (room && room.isActive) {
+        socket.emit('room-exists', { room: room.getRoomInfo() });
+      } else {
+        socket.emit('room-not-found', { error: 'Room not found' });
+      }
+    } catch (error) {
+      console.error('Error in handleValidateRoom:', error);
+      socket.emit('room-not-found', { error: 'Internal server error' });
+    }
   }
 
   /**
@@ -364,6 +394,62 @@ class SocketHandlers {
       timestamp: Date.now(),
       originalData: data
     });
+  }
+
+  /**
+   * WebRTC: forward SDP offer within room
+   */
+  handleWebRTCOffer(socket, data) {
+    try {
+      const { to, sdp } = data || {};
+      const user = this.roomManager.getUser(socket.id);
+      if (!user || !user.roomCode) return;
+      if (to) {
+        // Target a specific peer
+        this.io.to(to).emit('webrtc-offer', { from: socket.id, sdp });
+      } else {
+        // Broadcast to room except sender
+        socket.to(user.roomCode).emit('webrtc-offer', { from: socket.id, sdp });
+      }
+    } catch (e) {
+      console.error('Error in handleWebRTCOffer:', e);
+    }
+  }
+
+  /**
+   * WebRTC: forward SDP answer within room
+   */
+  handleWebRTCAnswer(socket, data) {
+    try {
+      const { to, sdp } = data || {};
+      const user = this.roomManager.getUser(socket.id);
+      if (!user || !user.roomCode) return;
+      if (to) {
+        this.io.to(to).emit('webrtc-answer', { from: socket.id, sdp });
+      } else {
+        socket.to(user.roomCode).emit('webrtc-answer', { from: socket.id, sdp });
+      }
+    } catch (e) {
+      console.error('Error in handleWebRTCAnswer:', e);
+    }
+  }
+
+  /**
+   * WebRTC: forward ICE candidate within room
+   */
+  handleWebRTCIceCandidate(socket, data) {
+    try {
+      const { to, candidate } = data || {};
+      const user = this.roomManager.getUser(socket.id);
+      if (!user || !user.roomCode) return;
+      if (to) {
+        this.io.to(to).emit('webrtc-ice-candidate', { from: socket.id, candidate });
+      } else {
+        socket.to(user.roomCode).emit('webrtc-ice-candidate', { from: socket.id, candidate });
+      }
+    } catch (e) {
+      console.error('Error in handleWebRTCIceCandidate:', e);
+    }
   }
 
   /**
