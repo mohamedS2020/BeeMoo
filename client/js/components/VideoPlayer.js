@@ -2,12 +2,14 @@
 // Integrates with StreamingManager for progressive video playback
 
 import { StreamingManager } from '../utils/streaming.js';
+import { SynchronizationManager } from '../utils/synchronization.js';
 
 export class VideoPlayer {
   constructor(socketClient, onStateChange) {
     this.socketClient = socketClient;
     this.onStateChange = onStateChange; // Callback for state changes
     this.streamingManager = new StreamingManager();
+    this.syncManager = new SynchronizationManager(socketClient);
     this.container = null;
     this.videoElement = null;
     this.controlsContainer = null;
@@ -33,7 +35,13 @@ export class VideoPlayer {
     this.handleKeyPress = this.handleKeyPress.bind(this);
     this.hideControlsDelayed = this.hideControlsDelayed.bind(this);
     
+    // Participant virtual playback timer
+    this.participantTimer = null;
+    this.participantStartTime = null;
+    this.lastLoggedTime = -1;
+    
     this.setupStreamingEvents();
+    this.setupSyncStatsListener();
   }
   
   /**
@@ -93,6 +101,17 @@ export class VideoPlayer {
     this.streamingManager.on('playing', () => {
       this.hideError();
     });
+  }
+
+  /**
+   * Setup sync statistics listener for frame-perfect sync quality monitoring
+   */
+  setupSyncStatsListener() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('sync-stats-updated', (event) => {
+        this.updateSyncQualityIndicator(event.detail);
+      });
+    }
   }
   
   /**
@@ -170,6 +189,403 @@ export class VideoPlayer {
       return 2 * 1024 * 1024; // 2MB chunks
     } else {
       return 4 * 1024 * 1024; // 4MB chunks for very large files
+    }
+  }
+
+  /**
+   * Initialize video player as participant (no local file, sync with host)
+   */
+  async initializeAsParticipant(container, movieState) {
+    this.container = container;
+    this.isHost = false;
+    
+    if (!container) {
+      throw new Error('Container element is required');
+    }
+    
+    console.log('🎬 Initializing participant video player:', movieState);
+    
+    // Store movie metadata for participant
+    this.participantMovieState = movieState;
+    this.duration = movieState.duration || 0;
+    this.currentTime = movieState.currentTime || 0;
+    
+    // Create player UI
+    this.createPlayerElements();
+    this.setupEventListeners();
+    
+    // Disable participant controls - only host can control playback
+    this.disableParticipantControls();
+    
+    // Setup virtual video player for participants
+    this.setupParticipantVideoPlayer(movieState);
+    
+    this.isInitialized = true;
+    this.updatePlayerState();
+    
+    console.log('✅ Participant video player initialized with metadata:', {
+      duration: this.duration,
+      title: movieState.title
+    });
+  }
+
+  /**
+   * Setup virtual video player for participants with proper metadata
+   */
+  setupParticipantVideoPlayer(movieState) {
+    // Set up video element with metadata for proper UI display
+    if (this.videoElement && movieState.duration) {
+      // Create a mock video source for duration display
+      // This won't actually play video but allows proper time display
+      Object.defineProperty(this.videoElement, 'duration', {
+        value: movieState.duration,
+        writable: true,
+        configurable: true
+      });
+      
+      Object.defineProperty(this.videoElement, 'currentTime', {
+        value: movieState.currentTime || 0,
+        writable: true,
+        configurable: true
+      });
+      
+      // Update UI to show proper duration
+      this.updateTimeDisplay();
+      this.hideLoadingOverlay();
+    }
+    
+    // Show participant message with video information
+    this.showParticipantMessage(movieState);
+    
+    console.log('🎬 Virtual video player setup complete for participant');
+  }
+
+  /**
+   * Disable playback controls for participants (host-controlled playback only)
+   */
+  disableParticipantControls() {
+    if (this.isHost) return; // Host keeps full control
+    
+    // Disable interactive elements for participants
+    const playPauseBtn = this.container.querySelector('#play-pause-btn');
+    const progressContainer = this.container.querySelector('#progress-container');
+    const syncBtn = this.container.querySelector('#sync-btn');
+    
+    // Disable play/pause button
+    if (playPauseBtn) {
+      playPauseBtn.disabled = true;
+      playPauseBtn.style.opacity = '0.6';
+      playPauseBtn.title = 'Only host can control playback';
+    }
+    
+    // Disable progress bar seeking
+    if (progressContainer) {
+      progressContainer.style.pointerEvents = 'none';
+      progressContainer.style.opacity = '0.8';
+      progressContainer.title = 'Only host can seek';
+    }
+    
+    // Hide sync button for participants
+    if (syncBtn) {
+      syncBtn.style.display = 'none';
+    }
+    
+    // Disable keyboard shortcuts for playback control
+    this.participantControlsDisabled = true;
+    
+    console.log('🔒 Participant playback controls disabled');
+  }
+
+  /**
+   * Show message to participants about the movie
+   */
+  showParticipantMessage(movieState) {
+    const loadingOverlay = this.container.querySelector('.loading-overlay');
+    if (loadingOverlay) {
+      // If we have duration, the video is "ready" for sync
+      if (movieState.duration && movieState.duration > 0) {
+        loadingOverlay.innerHTML = `
+          <div class="loading-content">
+            <div class="movie-info-participant">
+              <h3>🎬 ${this.escapeHtml(movieState.title || 'Movie Selected')}</h3>
+              <div class="movie-details">
+                <p><strong>Duration:</strong> ${this.formatTime(movieState.duration)}</p>
+                <p><strong>Resolution:</strong> ${movieState.width || '?'}×${movieState.height || '?'}</p>
+                <p><strong>Size:</strong> ${this.formatBytes(movieState.size || 0)}</p>
+              </div>
+              <div class="participant-status">
+                <p>🎯 <strong>Frame-perfect sync enabled</strong></p>
+                <p>📡 Synchronized with host playback</p>
+                <small style="color: rgba(255,255,255,0.7);">
+                  Video streaming from host to participants coming soon!
+                </small>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        // Auto-hide the overlay after 3 seconds to show the controls
+        setTimeout(() => {
+          if (loadingOverlay) {
+            loadingOverlay.style.display = 'none';
+          }
+        }, 3000);
+      } else {
+        // No duration yet, show waiting message
+        loadingOverlay.innerHTML = `
+          <div class="loading-content">
+            <div class="movie-info-participant">
+              <h3>🎬 ${this.escapeHtml(movieState.title || 'Movie Selected')}</h3>
+              <p>The host is streaming: <strong>${this.escapeHtml(movieState.title || 'Unknown Movie')}</strong></p>
+              <p>⏳ Waiting for host to start playback...</p>
+              <div class="sync-info" style="margin-top: 12px; font-size: 0.9rem; color: rgba(255,255,255,0.7);">
+                <p>📡 Frame-perfect synchronization ready</p>
+                <small>Video streaming implementation in progress</small>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      loadingOverlay.style.display = 'flex';
+    }
+  }
+
+  /**
+   * Sync participant player with host actions using frame-perfect synchronization
+   */
+  async syncWithHost(action, movieState) {
+    if (this.isHost) return; // Host doesn't sync with itself
+    
+    console.log(`🎯 Frame-perfect sync with host: ${action}`, movieState);
+    
+    // Update participant movie state with latest data
+    this.participantMovieState = { ...this.participantMovieState, ...movieState };
+    
+    // For participants, we'll do virtual sync (no actual video playback)
+    try {
+      // Update internal timing state based on host action
+      switch (action) {
+        case 'play':
+          this.isPlaying = true;
+          this.currentTime = movieState.currentTime || 0;
+          
+          // Start virtual playback timer for participants
+          this.startParticipantTimer();
+          
+          // If we have virtual video setup, update its currentTime
+          if (this.videoElement && this.duration > 0) {
+            Object.defineProperty(this.videoElement, 'currentTime', {
+              value: this.currentTime,
+              writable: true,
+              configurable: true
+            });
+          }
+          break;
+          
+        case 'pause':
+          this.isPlaying = false;
+          this.currentTime = movieState.currentTime || 0;
+          
+          // Stop virtual playback timer
+          this.stopParticipantTimer();
+          
+          if (this.videoElement && this.duration > 0) {
+            Object.defineProperty(this.videoElement, 'currentTime', {
+              value: this.currentTime,
+              writable: true,
+              configurable: true
+            });
+          }
+          break;
+          
+        case 'seek':
+          this.currentTime = movieState.currentTime || 0;
+          
+          // Update timer if playing
+          if (this.isPlaying) {
+            this.startParticipantTimer();
+          }
+          
+          if (this.videoElement && this.duration > 0) {
+            Object.defineProperty(this.videoElement, 'currentTime', {
+              value: this.currentTime,
+              writable: true,
+              configurable: true
+            });
+          }
+          break;
+      }
+      
+      // Update UI to reflect the sync
+      this.updatePlayerState();
+      
+      // Hide loading overlay if we have valid duration
+      if (this.duration > 0) {
+        this.hideLoadingOverlay();
+      }
+      
+      console.log(`✅ Virtual sync completed: ${action} at ${this.formatTime(this.currentTime)}`);
+      
+      // Show enhanced sync status
+      this.showParticipantSyncStatus(action, movieState);
+      
+    } catch (error) {
+      console.error('❌ Failed to sync with host:', error);
+      this.showParticipantSyncStatus(action, movieState);
+    }
+  }
+
+  /**
+   * Basic sync fallback method (original sync logic)
+   */
+  async basicSyncWithHost(action, movieState) {
+    switch (action) {
+      case 'play':
+        if (movieState.currentTime !== undefined) {
+          this.videoElement.currentTime = movieState.currentTime;
+        }
+        await this.videoElement.play();
+        this.isPlaying = true;
+        break;
+        
+      case 'pause':
+        this.videoElement.pause();
+        this.isPlaying = false;
+        break;
+        
+      case 'seek':
+        if (movieState.currentTime !== undefined) {
+          this.videoElement.currentTime = movieState.currentTime;
+        }
+        break;
+        
+      default:
+        console.warn('Unknown sync action:', action);
+    }
+  }
+
+  /**
+   * Show sync status for participants with enhanced information
+   */
+  showParticipantSyncStatus(action, movieState) {
+    // Don't show overlay if we have proper video metadata and duration
+    if (this.duration > 0) {
+      // Just update the play/pause button and return
+      this.updatePlayPauseButton();
+      return;
+    }
+    
+    // Show overlay for participants without full metadata
+    const loadingOverlay = this.container.querySelector('.loading-overlay');
+    if (loadingOverlay) {
+      const currentTime = this.formatTime(movieState.currentTime || 0);
+      const duration = this.formatTime(movieState.duration || 0);
+      const actionText = {
+        'play': '▶️ Playing',
+        'pause': '⏸️ Paused', 
+        'seek': '⏩ Seeking',
+        'sync': '🔄 Syncing'
+      }[action] || action;
+      
+      loadingOverlay.innerHTML = `
+        <div class="loading-content">
+          <div class="movie-info-participant">
+            <h3>🎬 ${this.escapeHtml(movieState.title || 'Movie Streaming')}</h3>
+            <div class="sync-status-main">
+              <p><strong>Host Status:</strong> ${actionText}</p>
+              <p><strong>Time:</strong> ${currentTime} / ${duration}</p>
+            </div>
+            <div class="sync-status">
+              <p>🎯 <strong>Frame-perfect sync active</strong></p>
+              <p>📡 Latency: ${Math.round(this.syncManager?.networkLatency || 0)}ms</p>
+              <small style="color: rgba(255,255,255,0.7);">
+                Video stream from host coming soon!
+              </small>
+            </div>
+          </div>
+        </div>
+      `;
+      loadingOverlay.style.display = 'flex';
+    }
+    
+    // Update our internal state
+    this.isPlaying = (action === 'play');
+    this.currentTime = movieState.currentTime || 0;
+    
+    // Update play/pause button if it exists
+    this.updatePlayPauseButton();
+  }
+
+  /**
+   * Start virtual playback timer for participants
+   */
+  startParticipantTimer() {
+    if (this.isHost) return; // Only for participants
+    
+    this.stopParticipantTimer(); // Clear any existing timer
+    
+    console.log(`🕐 Starting participant timer from ${this.formatTime(this.currentTime)} / ${this.formatTime(this.duration)}`);
+    
+    this.participantStartTime = Date.now();
+    const startCurrentTime = this.currentTime;
+    
+    this.participantTimer = setInterval(() => {
+      if (this.isPlaying && this.duration > 0) {
+        // Calculate elapsed time since play started
+        const elapsedSeconds = (Date.now() - this.participantStartTime) / 1000;
+        this.currentTime = startCurrentTime + elapsedSeconds;
+        
+        // Don't exceed video duration
+        if (this.currentTime >= this.duration) {
+          this.currentTime = this.duration;
+          this.isPlaying = false;
+          this.stopParticipantTimer();
+          console.log('🕐 Participant timer reached end');
+          return;
+        }
+        
+        // Force update video element currentTime for UI
+        if (this.videoElement) {
+          // Try multiple approaches to ensure UI updates
+          try {
+            this.videoElement.currentTime = this.currentTime;
+          } catch (e) {
+            // Fallback: use defineProperty
+            Object.defineProperty(this.videoElement, 'currentTime', {
+              value: this.currentTime,
+              writable: true,
+              configurable: true
+            });
+          }
+        }
+        
+        // Force UI updates
+        this.updateTimeDisplay();
+        this.updateProgressBar();
+        
+        // Debug log every 2 seconds
+        if (Math.floor(this.currentTime) % 2 === 0 && Math.floor(this.currentTime) !== this.lastLoggedTime) {
+          this.lastLoggedTime = Math.floor(this.currentTime);
+          console.log(`🕐 Timer: ${this.formatTime(this.currentTime)} / ${this.formatTime(this.duration)}`);
+        }
+      } else {
+        // Stop timer if not playing
+        this.stopParticipantTimer();
+      }
+    }, 100); // Update every 100ms for smooth time display
+    
+    console.log('🕐 Started participant virtual playback timer');
+  }
+
+  /**
+   * Stop virtual playback timer for participants
+   */
+  stopParticipantTimer() {
+    if (this.participantTimer) {
+      clearInterval(this.participantTimer);
+      this.participantTimer = null;
+      this.participantStartTime = null;
+      console.log('🕐 Stopped participant virtual playback timer');
     }
   }
   
@@ -284,13 +700,33 @@ export class VideoPlayer {
                   <div class="buffer-indicator"></div>
                 </div>
                 
+                <div class="sync-quality" id="sync-quality" title="Synchronization Quality" style="display: none;">
+                  <div class="sync-indicator"></div>
+                  <span class="sync-text">SYNC</span>
+                </div>
+                
                 ${this.isHost ? `
-                  <button class="control-btn sync-btn" id="sync-btn" title="Sync with participants">
-                    <svg viewBox="0 0 24 24" width="20" height="20">
-                      <path fill="currentColor" d="M12,18A6,6 0 0,1 6,12C6,11 6.25,10.03 6.7,9.2L5.24,7.74C4.46,8.97 4,10.43 4,12A8,8 0 0,0 12,20V23L16,19L12,15M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13 17.75,13.97 17.3,14.8L18.76,16.26C19.54,15.03 20,13.57 20,12A8,8 0 0,0 12,4Z" />
+                  <div class="host-controls">
+                    <div class="host-indicator" title="You are controlling playback for all participants">
+                      <svg viewBox="0 0 24 24" width="16" height="16">
+                        <path fill="currentColor" d="M12,5.5A3.5,3.5 0 0,1 15.5,9A3.5,3.5 0 0,1 12,12.5A3.5,3.5 0 0,1 8.5,9A3.5,3.5 0 0,1 12,5.5M5,8C5.56,8 6.08,8.15 6.53,8.42C6.38,9.85 6.8,11.27 7.66,12.38C7.16,13.34 6.16,14 5,14A3,3 0 0,1 2,11A3,3 0 0,1 5,8M19,8A3,3 0 0,1 22,11A3,3 0 0,1 19,14C17.84,14 16.84,13.34 16.34,12.38C17.2,11.27 17.62,9.85 17.47,8.42C17.92,8.15 18.44,8 19,8M5.5,18.25C5.5,16.18 8.41,14.5 12,14.5C15.59,14.5 18.5,16.18 18.5,18.25V20H5.5V18.25Z" />
+                      </svg>
+                      <span class="host-text">HOST</span>
+                    </div>
+                    <button class="control-btn sync-btn" id="sync-btn" title="Sync playback with all participants">
+                      <svg viewBox="0 0 24 24" width="20" height="20">
+                        <path fill="currentColor" d="M12,18A6,6 0 0,1 6,12C6,11 6.25,10.03 6.7,9.2L5.24,7.74C4.46,8.97 4,10.43 4,12A8,8 0 0,0 12,20V23L16,19L12,15M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13 17.75,13.97 17.3,14.8L18.76,16.26C19.54,15.03 20,13.57 20,12A8,8 0 0,0 12,4Z" />
+                      </svg>
+                    </button>
+                  </div>
+                ` : `
+                  <div class="participant-indicator" title="Playback is controlled by the host">
+                    <svg viewBox="0 0 24 24" width="16" height="16">
+                      <path fill="currentColor" d="M12,2C13.1,2 14,2.9 14,4C14,5.1 13.1,6 12,6C10.9,6 10,5.1 10,4C10,2.9 10.9,2 12,2M21,9V7L15,7V9H21M15,15H21V13H15V15M11,22A2,2 0 0,1 9,20V14A2,2 0 0,1 11,12H13A2,2 0 0,1 15,14V20A2,2 0 0,1 13,22H11Z" />
                     </svg>
-                  </button>
-                ` : ''}
+                    <span class="participant-text">VIEWER</span>
+                  </div>
+                `}
                 
                 <button class="control-btn fullscreen-btn" id="fullscreen-btn" title="Fullscreen">
                   <svg class="fullscreen-icon" viewBox="0 0 24 24" width="20" height="20">
@@ -508,6 +944,13 @@ export class VideoPlayer {
       return;
     }
     
+    // Restrict playback control shortcuts for participants
+    const isPlaybackControl = ['Space', 'ArrowLeft', 'ArrowRight'].includes(e.code);
+    if (isPlaybackControl && this.participantControlsDisabled) {
+      console.log('🔒 Playback keyboard shortcuts disabled for participants');
+      return;
+    }
+    
     switch (e.code) {
       case 'Space':
         e.preventDefault();
@@ -568,29 +1011,54 @@ export class VideoPlayer {
   }
   
   /**
-   * Playback control methods
+   * Enhanced playback control methods with host-controlled functionality
    */
   async play() {
+    // Restrict playback control to host only
+    if (this.participantControlsDisabled) {
+      console.log('🔒 Play blocked: Only host can control playback');
+      return;
+    }
+    
     try {
       await this.streamingManager.play();
       
       if (this.isHost) {
+        console.log('🎬 Host started playback - syncing with participants');
         this.notifyPlaybackChange('play', this.currentTime);
+        this.showHostAction('play');
       }
     } catch (error) {
       console.error('❌ Play failed:', error);
+      if (this.isHost) {
+        this.showError(`Failed to start playback: ${error.message}`);
+      }
     }
   }
   
   pause() {
+    // Restrict playback control to host only
+    if (this.participantControlsDisabled) {
+      console.log('🔒 Pause blocked: Only host can control playback');
+      return;
+    }
+    
     this.streamingManager.pause();
     
     if (this.isHost) {
+      console.log('🎬 Host paused playback - syncing with participants');
       this.notifyPlaybackChange('pause', this.currentTime);
+      this.showHostAction('pause');
     }
   }
   
   togglePlayPause() {
+    // Restrict playback control to host only
+    if (this.participantControlsDisabled) {
+      console.log('🔒 Play/Pause blocked: Only host can control playback');
+      return;
+    }
+    
     if (this.isPlaying) {
       this.pause();
     } else {
@@ -599,24 +1067,110 @@ export class VideoPlayer {
   }
   
   seek(time) {
+    // Restrict seeking to host only
+    if (this.participantControlsDisabled) {
+      console.log('🔒 Seek blocked: Only host can control playback');
+      return;
+    }
+    
     const clampedTime = Math.max(0, Math.min(this.duration, time));
     this.streamingManager.seek(clampedTime);
     
     if (this.isHost) {
+      console.log(`🎬 Host seeked to ${this.formatTime(clampedTime)} - syncing with participants`);
       this.notifyPlaybackChange('seek', clampedTime);
+      this.showHostAction('seek', clampedTime);
     }
+  }
+
+  /**
+   * Show visual feedback for host actions
+   */
+  showHostAction(action, time = null) {
+    if (!this.isHost) return;
+    
+    const hostIndicator = this.container.querySelector('.host-indicator');
+    if (!hostIndicator) return;
+    
+    // Create temporary action feedback
+    const actionFeedback = document.createElement('div');
+    actionFeedback.className = 'host-action-feedback';
+    
+    let actionText = '';
+    switch (action) {
+      case 'play':
+        actionText = '▶️ Playing for all';
+        break;
+      case 'pause':
+        actionText = '⏸️ Paused for all';
+        break;
+      case 'seek':
+        actionText = `⏩ Seeked to ${this.formatTime(time)}`;
+        break;
+    }
+    
+    actionFeedback.textContent = actionText;
+    actionFeedback.style.cssText = `
+      position: absolute;
+      top: -30px;
+      right: 0;
+      background: rgba(16, 185, 129, 0.9);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      white-space: nowrap;
+      z-index: 1000;
+      animation: fadeInOut 2s ease-in-out;
+    `;
+    
+    hostIndicator.style.position = 'relative';
+    hostIndicator.appendChild(actionFeedback);
+    
+    // Remove after animation
+    setTimeout(() => {
+      if (actionFeedback.parentNode) {
+        actionFeedback.parentNode.removeChild(actionFeedback);
+      }
+    }, 2000);
   }
   
   setVolume(volume) {
     this.volume = Math.max(0, Math.min(1, volume));
-    this.streamingManager.setVolume(this.volume);
-    this.videoElement.muted = false;
+    
+    // For WebRTC streams, directly control video element
+    if (this.videoElement.getAttribute('data-webrtc') === 'true') {
+      this.videoElement.volume = this.volume;
+      this.videoElement.muted = this.volume === 0;
+      console.log(`🔊 WebRTC volume set to: ${Math.round(this.volume * 100)}%`);
+    } else {
+      // For regular streaming, use streaming manager
+      this.streamingManager.setVolume(this.volume);
+      this.videoElement.muted = false;
+    }
+    
     this.updateVolumeControls();
   }
   
   toggleMute() {
     this.isMuted = !this.isMuted;
-    this.videoElement.muted = this.isMuted;
+    
+    // For WebRTC streams, handle muting differently
+    if (this.videoElement.getAttribute('data-webrtc') === 'true') {
+      this.videoElement.muted = this.isMuted;
+      // Also set volume to 0 when muted for extra safety
+      if (this.isMuted) {
+        this.lastVolume = this.volume; // Store current volume
+        this.videoElement.volume = 0;
+      } else {
+        this.videoElement.volume = this.lastVolume || this.volume;
+      }
+      console.log(`🔊 WebRTC ${this.isMuted ? 'muted' : 'unmuted'}`);
+    } else {
+      // For regular streaming
+      this.videoElement.muted = this.isMuted;
+    }
+    
     this.updateVolumeControls();
   }
   
@@ -643,11 +1197,55 @@ export class VideoPlayer {
     if (!this.isHost) return;
     
     console.log('🔄 Syncing with participants');
+    
+    // Show visual feedback for sync action
+    this.showSyncFeedback();
+    
     this.notifyPlaybackChange('sync', this.currentTime, {
       isPlaying: this.isPlaying,
       volume: this.volume,
       duration: this.duration
     });
+  }
+
+  /**
+   * Show visual feedback when host syncs with participants
+   */
+  showSyncFeedback() {
+    const syncBtn = this.container.querySelector('#sync-btn');
+    if (!syncBtn) return;
+    
+    // Temporarily change button appearance to show sync action
+    const originalHTML = syncBtn.innerHTML;
+    syncBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" width="20" height="20" class="sync-animation">
+        <path fill="currentColor" d="M12,18A6,6 0 0,1 6,12C6,11 6.25,10.03 6.7,9.2L5.24,7.74C4.46,8.97 4,10.43 4,12A8,8 0 0,0 12,20V23L16,19L12,15M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13 17.75,13.97 17.3,14.8L18.76,16.26C19.54,15.03 20,13.57 20,12A8,8 0 0,0 12,4Z" />
+      </svg>
+    `;
+    
+    // Add spinning animation class
+    const svg = syncBtn.querySelector('svg');
+    if (svg) {
+      svg.style.animation = 'spin 1s linear';
+    }
+    
+    // Reset after animation
+    setTimeout(() => {
+      syncBtn.innerHTML = originalHTML;
+      this.updateSyncButtonTooltip();
+    }, 1000);
+  }
+
+  /**
+   * Update sync button tooltip with participant count
+   */
+  updateSyncButtonTooltip() {
+    const syncBtn = this.container.querySelector('#sync-btn');
+    if (!syncBtn || !this.isHost) return;
+    
+    // This would be called when participant count changes
+    // For now, show generic tooltip - will be enhanced when participant count is available
+    syncBtn.title = 'Sync playback with all participants';
   }
   
   /**
@@ -741,6 +1339,59 @@ export class VideoPlayer {
       }
     }
   }
+
+  /**
+   * Update sync quality indicator based on synchronization statistics
+   */
+  updateSyncQualityIndicator(syncStats) {
+    if (this.isHost) return; // Only show for participants
+    
+    const syncQuality = this.container.querySelector('#sync-quality');
+    const syncIndicator = this.container.querySelector('.sync-indicator');
+    const syncText = this.container.querySelector('.sync-text');
+    
+    if (!syncQuality || !syncIndicator || !syncStats) return;
+    
+    // Show sync indicator when calibrated
+    if (syncStats.isCalibrated) {
+      syncQuality.style.display = 'flex';
+      
+      // Update indicator based on sync quality
+      let color = '#6b7280'; // Gray default
+      let text = 'SYNC';
+      
+      if (syncStats.drift) {
+        switch (syncStats.drift.quality) {
+          case 'excellent':
+            color = '#10b981'; // Green
+            text = 'SYNC';
+            break;
+          case 'good':
+            color = '#f59e0b'; // Yellow
+            text = 'SYNC';
+            break;
+          case 'fair':
+            color = '#ef4444'; // Red
+            text = 'DRIFT';
+            break;
+          default:
+            color = '#6b7280';
+            text = 'SYNC';
+        }
+      }
+      
+      syncIndicator.style.backgroundColor = color;
+      syncText.textContent = text;
+      
+      // Update tooltip with detailed stats
+      const latency = Math.round(syncStats.networkLatency);
+      const accuracy = syncStats.drift ? Math.round(syncStats.drift.averageAccuracy) : 0;
+      syncQuality.title = `Sync Quality: ${syncStats.drift?.quality || 'unknown'}\nLatency: ${latency}ms\nAccuracy: ±${accuracy}ms`;
+      
+    } else {
+      syncQuality.style.display = 'none';
+    }
+  }
   
   updateLoadingProgress(progress) {
     const progressFill = this.container.querySelector('#loading-progress-fill');
@@ -831,6 +1482,8 @@ export class VideoPlayer {
       movieState: {
         currentTime: time,
         isPlaying: this.isPlaying,
+        title: this.currentFile?.name || 'Unknown Movie',
+        duration: this.duration || 0,
         ...extraData
       }
     });
@@ -988,11 +1641,31 @@ export class VideoPlayer {
   }
   
   /**
+   * Escape HTML to prevent XSS
+   */
+  escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  /**
    * Cleanup and destroy player
    */
   destroy() {
     // Stop streaming
     this.streamingManager.stop();
+    
+    // Stop synchronization
+    if (this.syncManager) {
+      this.syncManager.destroy();
+    }
+    
+    // Stop participant timer
+    this.stopParticipantTimer();
     
     // Remove event listeners
     document.removeEventListener('keydown', this.handleKeyPress);

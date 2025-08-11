@@ -85,6 +85,9 @@ export class RoomView {
       }
     });
 
+    // Set peer manager role based on host status
+    this.peerManager.setHost(this.isHost);
+
     // Render remote audio when tracks arrive
     this.peerManager.onRemoteTrack = (peerId, stream) => {
       let el = this.root.querySelector(`audio[data-peer="${peerId}"]`);
@@ -98,6 +101,12 @@ export class RoomView {
       el.srcObject = stream;
     };
 
+    // Handle remote video tracks for participants
+    this.peerManager.onRemoteVideoTrack = (peerId, stream) => {
+      console.log(`🎥 Received video stream from host`);
+      this.handleRemoteVideoStream(peerId, stream);
+    };
+
     // Hook participant-volume changes to adjust remote audio elements
     this.participantList.onVolumeChange = (socketId, volume) => {
       const el = this.root.querySelector(`audio[data-peer="${socketId}"]`);
@@ -106,6 +115,9 @@ export class RoomView {
 
     // Bind participant events
     this.bindRoomParticipantEvents();
+    
+    // Bind movie synchronization events
+    this.bindMovieEvents();
 
     // Voice toggle
     const voiceBtn = this.root.querySelector('#toggle-voice');
@@ -188,15 +200,21 @@ export class RoomView {
         this.movieState = 'ready';
         console.log('✅ Video player initialized successfully');
         
-        // Notify server about movie being ready
+        // Wait for video metadata to load before notifying server
+        await this.waitForVideoMetadata();
+        
+        // Start WebRTC video streaming if host
+        if (this.isHost) {
+          await this.startVideoStreaming();
+        }
+        
+        // Get comprehensive video metadata from the video player
+        const videoMetadata = this.getVideoMetadata(movieData);
+        
+        // Notify server about movie being ready with complete metadata
         this.socketClient.emit('movie-control', {
           action: 'start-streaming',
-          movieState: {
-            title: movieData.name,
-            type: movieData.type,
-            size: movieData.size,
-            duration: this.videoPlayer.duration || 0
-          }
+          movieState: videoMetadata
         });
         
       } else {
@@ -516,6 +534,576 @@ export class RoomView {
     this.socketClient.off('participant-left', this._onLeft);
     this.socketClient.off('participant-disconnected', this._onDisconnected);
     this.boundHandlers = false;
+  }
+
+  /**
+   * Bind movie synchronization events for participants
+   */
+  bindMovieEvents() {
+    if (this.movieEventsbound) return;
+    
+    // Listen for movie state updates from the host
+    this.socketClient.on('movie-sync', (data) => {
+      console.log('🎬 Received movie sync from host:', data);
+      this.handleMovieSync(data);
+    });
+    
+    // Listen for movie control errors
+    this.socketClient.on('movie-control-error', (data) => {
+      console.error('❌ Movie control error:', data);
+      alert(`Movie error: ${data.error}`);
+    });
+    
+    this.movieEventsbound = true;
+  }
+
+  /**
+   * Wait for video metadata to load completely
+   */
+  async waitForVideoMetadata(timeout = 5000) {
+    if (!this.videoPlayer || !this.videoPlayer.videoElement) {
+      console.warn('⚠️ No video player available for metadata loading');
+      return;
+    }
+
+    const videoElement = this.videoPlayer.videoElement;
+    
+    // If metadata is already loaded, return immediately
+    if (videoElement.duration && !isNaN(videoElement.duration)) {
+      console.log('✅ Video metadata already loaded');
+      return;
+    }
+
+    console.log('⏳ Waiting for video metadata to load...');
+    
+    return new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        console.warn('⚠️ Video metadata loading timeout, continuing anyway...');
+        resolve();
+      }, timeout);
+
+      const onMetadataLoaded = () => {
+        console.log('✅ Video metadata loaded successfully');
+        clearTimeout(timeoutId);
+        videoElement.removeEventListener('loadedmetadata', onMetadataLoaded);
+        videoElement.removeEventListener('durationchange', onMetadataLoaded);
+        videoElement.removeEventListener('loadeddata', onMetadataLoaded);
+        resolve();
+      };
+
+      videoElement.addEventListener('loadedmetadata', onMetadataLoaded);
+      videoElement.addEventListener('durationchange', onMetadataLoaded);
+      videoElement.addEventListener('loadeddata', onMetadataLoaded);
+    });
+  }
+
+  /**
+   * Get comprehensive video metadata for sharing with participants
+   */
+  getVideoMetadata(movieData) {
+    const videoElement = this.videoPlayer?.videoElement;
+    const streamingStats = this.videoPlayer?.streamingManager?.getStats();
+    
+    const metadata = {
+      // Basic file information
+      title: movieData.name,
+      type: movieData.type,
+      size: movieData.size,
+      
+      // Video properties
+      duration: videoElement?.duration || 0,
+      width: videoElement?.videoWidth || 0,
+      height: videoElement?.videoHeight || 0,
+      
+      // Streaming information
+      totalChunks: streamingStats?.totalChunks || 0,
+      chunkSize: streamingStats?.chunkSize || 0,
+      mimeType: streamingStats?.mimeType || movieData.type,
+      
+      // Playback state
+      currentTime: videoElement?.currentTime || 0,
+      isPlaying: false,
+      
+      // Additional metadata for future features
+      hasVideo: !!(videoElement?.videoWidth && videoElement?.videoHeight),
+      hasAudio: !!(videoElement?.webkitAudioDecodedByteCount || videoElement?.audioTracks?.length),
+      
+      // Timestamp for sync
+      timestamp: Date.now()
+    };
+    
+    console.log('📊 Generated video metadata for participants:', metadata);
+    return metadata;
+  }
+
+  /**
+   * Start WebRTC video streaming from host to participants
+   */
+  async startVideoStreaming() {
+    if (!this.isHost) {
+      console.warn('⚠️ Cannot start video streaming: not host');
+      return;
+    }
+
+    if (!this.videoPlayer || !this.videoPlayer.videoElement) {
+      console.warn('⚠️ Cannot start video streaming: video player not ready');
+      return;
+    }
+
+    try {
+      console.log('🎥 Starting WebRTC video streaming...');
+      console.log('🔍 Video element state:', {
+        readyState: this.videoPlayer.videoElement.readyState,
+        videoWidth: this.videoPlayer.videoElement.videoWidth,
+        videoHeight: this.videoPlayer.videoElement.videoHeight,
+        currentSrc: this.videoPlayer.videoElement.currentSrc,
+        paused: this.videoPlayer.videoElement.paused
+      });
+      
+      // Check browser support
+      const support = WebRTCUtils.checkWebRTCSupport();
+      console.log('🔍 WebRTC support check:', support);
+      
+      if (!support.supported) {
+        throw new Error(`Browser missing WebRTC features: ${Object.entries(support).filter(([k,v]) => !v && k !== 'supported').map(([k]) => k).join(', ')}`);
+      }
+
+      // Check if video element supports captureStream
+      if (typeof this.videoPlayer.videoElement.captureStream !== 'function') {
+        throw new Error('Video element does not support captureStream - try a different browser');
+      }
+
+      // Wait for video to be ready
+      if (this.videoPlayer.videoElement.readyState < 2) {
+        console.log('🎥 Waiting for video metadata to load...');
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Video metadata loading timeout'));
+          }, 5000);
+          
+          this.videoPlayer.videoElement.addEventListener('loadedmetadata', () => {
+            clearTimeout(timeout);
+            resolve();
+          }, { once: true });
+        });
+      }
+
+      // Check peer connections exist
+      const peerCount = this.peerManager.peerIdToPc.size;
+      console.log(`🔍 Active peer connections: ${peerCount}`);
+      
+      if (peerCount === 0) {
+        console.warn('⚠️ No active peer connections - participants may need to start voice chat first');
+        // Continue anyway - peers might connect later
+      }
+
+      // Ensure host video element has audio enabled for streaming
+      console.log('🔊 Host video audio check before streaming:', {
+        muted: this.videoPlayer.videoElement.muted,
+        volume: this.videoPlayer.videoElement.volume
+      });
+      
+      // Temporarily unmute host video to ensure audio is captured
+      const hostOriginalMuted = this.videoPlayer.videoElement.muted;
+      this.videoPlayer.videoElement.muted = false;
+      this.videoPlayer.videoElement.volume = 1.0;
+
+      // Start video streaming through PeerManager
+      console.log('🎥 Calling peerManager.startVideoStreaming...');
+      const result = await this.peerManager.startVideoStreaming(
+        this.videoPlayer.videoElement,
+        { 
+          frameRate: 30,
+          quality: 'high',
+          includeAudio: true
+        }
+      );
+
+      // Restore host video muted state (host usually mutes their own video to avoid echo)
+      this.videoPlayer.videoElement.muted = hostOriginalMuted;
+
+      console.log('🎥 Video streaming result:', result);
+
+      if (result.success) {
+        console.log('✅ Video streaming started successfully');
+        
+        // Show streaming status in UI
+        this.showVideoStreamingStatus(true);
+        
+        // Notify participants
+        this.showTemporaryMessage('🎥 Video streaming to participants started!', 'success');
+      } else {
+        throw new Error(result.error);
+      }
+      
+    } catch (error) {
+      console.error('❌ Failed to start video streaming:', error);
+      
+      // Show detailed error to user
+      const message = `Video streaming failed: ${error.message}. Audio and sync will still work.`;
+      this.showTemporaryMessage(message, 'warning');
+      
+      // Also log technical details
+      console.log('🔍 Technical details:', {
+        hasVideoPlayer: !!this.videoPlayer,
+        hasVideoElement: !!this.videoPlayer?.videoElement,
+        videoElementReady: this.videoPlayer?.videoElement?.readyState,
+        peerConnections: this.peerManager?.peerIdToPc?.size || 0,
+        isHost: this.isHost
+      });
+    }
+  }
+
+  /**
+   * Stop WebRTC video streaming
+   */
+  async stopVideoStreaming() {
+    try {
+      await this.peerManager.stopVideoStreaming();
+      this.showVideoStreamingStatus(false);
+      console.log('🎥 Video streaming stopped');
+    } catch (error) {
+      console.error('❌ Failed to stop video streaming:', error);
+    }
+  }
+
+  /**
+   * Handle remote video stream for participants
+   */
+  handleRemoteVideoStream(peerId, stream) {
+    try {
+      console.log(`🎥 Setting up remote video stream from peer ${peerId}`, {
+        streamId: stream.id,
+        videoTracks: stream.getVideoTracks().length,
+        audioTracks: stream.getAudioTracks().length
+      });
+
+      // Log detailed track information
+      stream.getVideoTracks().forEach((track, i) => {
+        console.log(`🎥 Video track ${i}:`, {
+          id: track.id,
+          label: track.label,
+          enabled: track.enabled,
+          readyState: track.readyState
+        });
+      });
+
+      stream.getAudioTracks().forEach((track, i) => {
+        console.log(`🔊 Audio track ${i}:`, {
+          id: track.id,
+          label: track.label,
+          enabled: track.enabled,
+          readyState: track.readyState
+        });
+      });
+      
+      // Check if we have a video player ready
+      if (!this.videoPlayer || !this.videoPlayer.videoElement) {
+        console.error('❌ Video player not ready for remote stream');
+        return;
+      }
+
+      // Log current video element state
+      console.log('🔍 Video element before stream:', {
+        src: this.videoPlayer.videoElement.src,
+        srcObject: this.videoPlayer.videoElement.srcObject,
+        readyState: this.videoPlayer.videoElement.readyState
+      });
+      
+      // Replace the participant's virtual video with actual stream
+      this.videoPlayer.videoElement.srcObject = stream;
+      this.videoPlayer.videoElement.autoplay = true;
+      this.videoPlayer.videoElement.playsInline = true;
+      this.videoPlayer.videoElement.muted = false; // Ensure video audio is not muted
+      this.videoPlayer.videoElement.volume = 1.0; // Ensure volume is at maximum
+      
+      // Video audio is handled by existing video player controls
+      
+      // Mark video element as WebRTC stream
+      this.videoPlayer.videoElement.setAttribute('data-webrtc', 'true');
+      
+      // Listen for stream events
+      this.videoPlayer.videoElement.addEventListener('loadedmetadata', () => {
+        console.log('🎥 Remote video metadata loaded:', {
+          videoWidth: this.videoPlayer.videoElement.videoWidth,
+          videoHeight: this.videoPlayer.videoElement.videoHeight,
+          duration: this.videoPlayer.videoElement.duration,
+          muted: this.videoPlayer.videoElement.muted,
+          volume: this.videoPlayer.videoElement.volume
+        });
+
+        // Check if stream has audio tracks
+        const streamAudioTracks = stream.getAudioTracks();
+        if (streamAudioTracks.length > 0) {
+          console.log('🔊 Video stream has audio tracks - should have sound');
+        } else {
+          console.warn('⚠️ Video stream has no audio tracks - no sound expected');
+        }
+      }, { once: true });
+      
+      this.videoPlayer.videoElement.addEventListener('canplay', () => {
+        console.log('🎥 Remote video can play');
+        
+        // Double-check audio settings
+        console.log('🔊 Final audio check:', {
+          muted: this.videoPlayer.videoElement.muted,
+          volume: this.videoPlayer.videoElement.volume,
+          audioTracks: stream.getAudioTracks().length
+        });
+        
+        // Hide loading overlay and show video
+        this.videoPlayer.hideLoadingOverlay();
+        
+        // Update participant status message
+        const audioMessage = stream.getAudioTracks().length > 0 ? ' with sound' : ' (no audio)';
+        this.showTemporaryMessage(`🎥 Video stream connected${audioMessage}!`, 'success');
+      }, { once: true });
+
+      this.videoPlayer.videoElement.addEventListener('error', (e) => {
+        console.error('❌ Remote video error:', e);
+        this.showTemporaryMessage('Video playback error', 'error');
+      }, { once: true });
+      
+      // IMPORTANT: Keep the virtual duration for UI display
+      // WebRTC streams don't have duration, so we keep using the original movie duration
+      const originalDuration = this.videoPlayer.duration;
+      
+      // Stop participant virtual timer since we have real video
+      this.videoPlayer.stopParticipantTimer();
+      
+      // Restore the original duration after stream assignment
+      if (originalDuration && originalDuration > 0) {
+        console.log(`🕐 Preserving original duration: ${originalDuration}s`);
+        
+        // Wait for stream to be ready, then set duration
+        this.videoPlayer.videoElement.addEventListener('loadedmetadata', () => {
+          // Override the WebRTC stream's duration with the original movie duration
+          Object.defineProperty(this.videoPlayer.videoElement, 'duration', {
+            value: originalDuration,
+            writable: false,
+            configurable: true
+          });
+          
+          this.videoPlayer.duration = originalDuration;
+          this.videoPlayer.updateTimeDisplay(); // Update UI
+          
+          console.log('🕐 Duration restored for WebRTC stream');
+        }, { once: true });
+      }
+      
+      console.log('✅ Remote video stream setup completed');
+      
+    } catch (error) {
+      console.error('❌ Failed to handle remote video stream:', error);
+      this.showTemporaryMessage('Video stream connection failed', 'error');
+    }
+  }
+
+  /**
+   * Show video streaming status indicator
+   */
+  showVideoStreamingStatus(isStreaming) {
+    // Update host indicator if exists
+    const hostIndicator = this.root.querySelector('.host-indicator');
+    if (hostIndicator && this.isHost) {
+      const statusElement = hostIndicator.querySelector('.stream-status');
+      
+      if (statusElement) {
+        statusElement.remove();
+      }
+      
+      if (isStreaming) {
+        const status = document.createElement('div');
+        status.className = 'stream-status';
+        status.innerHTML = '🎥 LIVE';
+        status.style.cssText = `
+          font-size: 8px;
+          color: #ef4444;
+          font-weight: 700;
+          margin-top: 2px;
+        `;
+        hostIndicator.appendChild(status);
+      }
+    }
+  }
+
+  /**
+   * Show temporary message to user
+   */
+  showTemporaryMessage(message, type = 'info') {
+    const messageEl = document.createElement('div');
+    messageEl.className = `temp-message temp-message-${type}`;
+    messageEl.textContent = message;
+    messageEl.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      color: white;
+      font-weight: 500;
+      z-index: 1000;
+      animation: slideIn 0.3s ease-out;
+      background: ${type === 'success' ? '#10b981' : type === 'warning' ? '#f59e0b' : type === 'error' ? '#ef4444' : '#3b82f6'};
+    `;
+    
+    document.body.appendChild(messageEl);
+    
+    // Auto-remove after 4 seconds
+    setTimeout(() => {
+      if (messageEl.parentNode) {
+        messageEl.style.animation = 'slideOut 0.3s ease-in';
+        setTimeout(() => {
+          if (messageEl.parentNode) {
+            messageEl.parentNode.removeChild(messageEl);
+          }
+        }, 300);
+      }
+    }, 4000);
+  }
+
+
+
+  /**
+   * Handle movie synchronization from host
+   */
+  async handleMovieSync(data) {
+    const { action, movieState } = data;
+    
+    console.log('🎬 Processing movie sync:', { action, movieState });
+    
+    switch (action) {
+      case 'start-streaming':
+        await this.handleHostStartedStreaming(movieState);
+        break;
+        
+      case 'play':
+        this.handleHostPlay(movieState);
+        break;
+        
+      case 'pause':
+        this.handleHostPause(movieState);
+        break;
+        
+      case 'seek':
+        this.handleHostSeek(movieState);
+        break;
+        
+      case 'stop-streaming':
+        this.handleHostStoppedStreaming();
+        break;
+        
+      default:
+        console.warn('Unknown movie sync action:', action);
+    }
+  }
+
+  /**
+   * Handle when host starts streaming (participants see video player)
+   */
+  async handleHostStartedStreaming(movieState) {
+    if (this.isHost) return; // Host already has the video player
+    
+    console.log('🎬 Host started streaming, transitioning from waiting screen to video player');
+    
+    // Update movie state
+    this.selectedMovie = {
+      name: movieState.title || 'Unknown Movie',
+      type: movieState.type || 'video/mp4',
+      size: movieState.size || 0
+    };
+    this.movieState = 'ready';
+    
+    // Update UI to show video player container
+    this.updateMovieStage();
+    
+    // Initialize video player for participant (but without file - they'll receive stream)
+    const videoPlayerContainer = this.root.querySelector('#video-player-container');
+    if (videoPlayerContainer) {
+      try {
+        // Import VideoPlayer dynamically to avoid circular dependencies
+        const { VideoPlayer } = await import('./VideoPlayer.js');
+        
+        this.videoPlayer = new VideoPlayer(
+          this.socketClient,
+          (state) => this.handleVideoStateChange(state)
+        );
+        
+        // For participants, we create a placeholder video element that will be controlled by the host
+        this.videoPlayer.initializeAsParticipant(videoPlayerContainer, movieState);
+        
+        console.log('✅ Participant video player initialized');
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize participant video player:', error);
+        this.movieState = 'error';
+        this.updateMovieStage();
+      }
+    }
+  }
+
+  /**
+   * Handle host play/pause/seek events
+   */
+  handleHostPlay(movieState) {
+    if (!this.videoPlayer) return;
+    console.log('▶️ Host started playback');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('play', syncState);
+  }
+
+  handleHostPause(movieState) {
+    if (!this.videoPlayer) return;
+    console.log('⏸️ Host paused playback');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('pause', syncState);
+  }
+
+  handleHostSeek(movieState) {
+    if (!this.videoPlayer) return;
+    console.log('⏩ Host seeked to:', movieState.currentTime);
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('seek', syncState);
+  }
+
+  handleHostStoppedStreaming() {
+    console.log('⏹️ Host stopped streaming');
+    
+    // Stop video streaming if host
+    if (this.isHost) {
+      this.stopVideoStreaming();
+    }
+    
+    // Reset movie state
+    this.selectedMovie = null;
+    this.movieState = 'none';
+    
+    // Clean up video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+    
+    // Update UI back to waiting state
+    this.updateMovieStage();
   }
 
   renderMovieStage() {

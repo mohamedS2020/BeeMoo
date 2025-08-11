@@ -37,6 +37,7 @@ class SocketHandlers {
     socket.on('webrtc-answer', (data) => this.handleWebRTCAnswer(socket, data));
     socket.on('webrtc-ice-candidate', (data) => this.handleWebRTCIceCandidate(socket, data));
     socket.on('ping', (data) => this.handlePing(socket, data));
+    socket.on('time-sync-request', (data) => this.handleTimeSyncRequest(socket, data));
     socket.on('disconnect', () => this.handleDisconnection(socket));
 
     // Send connection confirmation
@@ -307,6 +308,14 @@ class SocketHandlers {
           };
           break;
           
+        case 'sync':
+          // Sync action doesn't change state, just re-broadcasts current state
+          updateData = {
+            currentTime: movieState?.currentTime || 0,
+            // Keep all other current state unchanged
+          };
+          break;
+          
         default:
           socket.emit('movie-control-error', { error: 'Invalid action' });
           return;
@@ -315,11 +324,17 @@ class SocketHandlers {
       const result = this.roomManager.updateMovieState(socket.id, updateData);
       
       if (result.success) {
-        // Notify all participants in the room about movie state change
+        // Notify all participants in the room about movie state change with precision timing
+        const precisionTimestamp = Date.now();
         this.io.to(result.roomCode).emit('movie-sync', {
           action: action,
-          movieState: result.movieState,
-          timestamp: new Date().toISOString()
+          movieState: {
+            ...result.movieState,
+            timestamp: precisionTimestamp, // High-precision timestamp for sync
+            serverTime: precisionTimestamp // Duplicate for clarity
+          },
+          timestamp: new Date().toISOString(), // Human-readable timestamp
+          precisionTimestamp: precisionTimestamp // Millisecond precision
         });
 
         console.log(`🎬 Movie ${action} in room ${result.roomCode} by ${user.username}`);
@@ -394,6 +409,30 @@ class SocketHandlers {
       timestamp: Date.now(),
       originalData: data
     });
+  }
+
+  /**
+   * Handle time synchronization request for frame-perfect sync
+   * @param {Socket} socket 
+   * @param {object} data 
+   */
+  handleTimeSyncRequest(socket, data) {
+    try {
+      const serverTime = Date.now();
+      const { clientTime } = data || {};
+      
+      // Respond immediately with server timestamp
+      socket.emit('time-sync-response', {
+        serverTime: serverTime,
+        clientTime: clientTime,
+        requestId: data.requestId || null
+      });
+      
+      // Optional: Log for debugging (can be removed in production)
+      // console.log('🕐 Time sync request processed');
+    } catch (error) {
+      console.error('Error in handleTimeSyncRequest:', error);
+    }
   }
 
   /**
