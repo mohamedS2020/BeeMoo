@@ -10,7 +10,7 @@ primary_region = 'cdg'
 
 [env]
   CLIENT_URL = 'https://beemoo.vercel.app'
-  PORT = '3001'
+  PORT = '3000'
   app = 'beemoo'
   primary_region = 'cdg'
 
