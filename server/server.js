@@ -10,9 +10,9 @@ const server = createServer(app);
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 
-// Enhanced CORS configuration for development
+// CORS configuration for all environments
 const corsOptions = {
-  origin: NODE_ENV === 'development' ? [CLIENT_URL, 'http://localhost:3000'] : false,
+  origin: CLIENT_URL,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -20,7 +20,7 @@ const corsOptions = {
 
 const io = new Server(server, {
   cors: {
-    origin: NODE_ENV === 'development' ? CLIENT_URL : false,
+    origin: CLIENT_URL,
     methods: ["GET", "POST"],
     credentials: true
   }
