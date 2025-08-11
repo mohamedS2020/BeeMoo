@@ -42,6 +42,7 @@ export class VideoPlayer {
   setupStreamingEvents() {
     this.streamingManager.on('ready', () => {
       console.log('🎬 Video ready for playback');
+      this.hideError(); // Hide any previous error when streaming is ready
       this.updatePlayerState();
       this.emit('ready');
     });
@@ -80,7 +81,17 @@ export class VideoPlayer {
         errorMessage = 'Video format error: This video format is not supported. Please use an MP4 file with H.264 video and AAC audio.';
       }
       
-      this.showError(errorMessage);
+      // Only show error if video is not already playing (i.e., streaming hasn't recovered)
+      if (this.videoElement.readyState < 2 && !this.videoElement.duration) {
+        this.showError(errorMessage);
+      } else {
+        console.log('🔄 Streaming error occurred but video is playable, not showing error UI');
+      }
+    });
+    
+    // Hide error when video starts playing successfully
+    this.streamingManager.on('playing', () => {
+      this.hideError();
     });
   }
   
@@ -313,6 +324,7 @@ export class VideoPlayer {
       this.duration = this.videoElement.duration;
       this.updateTimeDisplay();
       this.hideLoadingOverlay();
+      this.hideError(); // Hide error when metadata loads successfully
       this.emit('metadata-loaded', {
         duration: this.duration,
         width: this.videoElement.videoWidth,
@@ -327,6 +339,7 @@ export class VideoPlayer {
         this.duration = this.videoElement.duration;
         this.updateTimeDisplay();
         this.hideLoadingOverlay();
+        this.hideError(); // Hide error when data loads successfully
       }
     });
     
@@ -336,12 +349,14 @@ export class VideoPlayer {
         this.duration = this.videoElement.duration;
         this.updateTimeDisplay();
         this.hideLoadingOverlay();
+        this.hideError(); // Hide error when duration is available
       }
     });
     
     this.videoElement.addEventListener('play', () => {
       this.isPlaying = true;
       this.updatePlayPauseButton();
+      this.hideError(); // Hide error when video starts playing
       this.notifyStateChange();
     });
     
@@ -911,6 +926,55 @@ export class VideoPlayer {
       return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
     } else {
       return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+    }
+  }
+  
+  /**
+   * Show error overlay with message
+   */
+  showError(message) {
+    const errorOverlay = this.container.querySelector('#error-overlay');
+    const errorMessage = this.container.querySelector('#error-message');
+    const retryBtn = this.container.querySelector('#retry-btn');
+    
+    if (errorOverlay && errorMessage) {
+      errorMessage.textContent = message;
+      errorOverlay.style.display = 'flex';
+      
+      // Setup retry button
+      if (retryBtn) {
+        retryBtn.onclick = () => {
+          this.hideError();
+          // Optionally trigger a retry of the streaming
+          if (this.currentFile) {
+            console.log('🔄 Retrying video initialization...');
+            this.initializeWithFile(this.currentFile, this.container, this.isHost);
+          }
+        };
+      }
+      
+      console.log('⚠️ Error displayed:', message);
+    }
+  }
+  
+  /**
+   * Hide error overlay
+   */
+  hideError() {
+    const errorOverlay = this.container.querySelector('#error-overlay');
+    if (errorOverlay) {
+      errorOverlay.style.display = 'none';
+      console.log('✅ Error overlay hidden');
+    }
+  }
+  
+  /**
+   * Show or hide buffering indicator
+   */
+  showBufferingIndicator(show) {
+    const bufferingOverlay = this.container.querySelector('#buffering-overlay');
+    if (bufferingOverlay) {
+      bufferingOverlay.style.display = show ? 'flex' : 'none';
     }
   }
   
