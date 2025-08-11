@@ -7,7 +7,8 @@ export class SocketClient {
   constructor() {
     this.socket = null;
     this.isConnected = false;
-    this.serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+    // Use VITE_API_URL from .env for backend URL
+    this.serverUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
   }
 
   connect() {

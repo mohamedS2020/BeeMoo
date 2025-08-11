@@ -44,3 +44,8 @@ export default defineConfig({
     include: ['socket.io-client'] // Pre-bundle Socket.io client
   }
 });
+ // You can access the backend URL in your client code with import.meta.env.VITE_API_URL
+ // Example usage in your JS:
+ //   const apiUrl = import.meta.env.VITE_API_URL;
+ 
+ // No need to add env here; Vite auto-loads .env files
