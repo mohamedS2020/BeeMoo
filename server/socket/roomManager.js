@@ -400,9 +400,13 @@ class RoomManager {
       }
     }
 
-    usersToRemove.forEach(socketId => {
-      const user = this.users.get(socketId);
-      console.log(`🧹 Cleaning up disconnected user: ${user.username} (${socketId})`);
+      usersToRemove.forEach(socketId => {
+        const user = this.users.get(socketId);
+        if (user && user.username) {
+          console.log(`🧹 Cleaning up disconnected user: ${user.username} (${socketId})`);
+        } else {
+          console.log(`🧹 Cleaning up disconnected user: (unknown) (${socketId})`);
+        }
       this.leaveRoom(socketId);
     });
 

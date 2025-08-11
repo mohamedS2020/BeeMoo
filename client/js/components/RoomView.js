@@ -21,6 +21,10 @@ export class RoomView {
     this.isHost = false;
     this.selectedMovie = null;
     this.movieState = 'none'; // 'none', 'selecting', 'loading', 'ready', 'playing'
+
+  // Remote host media combination for participants
+  this.remoteHostVideoStream = null; // MediaStream with video (+ possibly video audio)
+  this.remoteHostAudioStreams = []; // Array of MediaStreams containing host mic audio
   }
 
   mount(container, initialData) {
@@ -88,27 +92,66 @@ export class RoomView {
     // Set peer manager role based on host status
     this.peerManager.setHost(this.isHost);
 
-    // Render remote audio when tracks arrive
+    // Render remote audio when tracks arrive (participants: route host audio into VideoPlayer instead of <audio>)
     this.peerManager.onRemoteTrack = (peerId, stream) => {
-      let el = this.root.querySelector(`audio[data-peer="${peerId}"]`);
-      if (!el) {
-        el = document.createElement('audio');
-        el.dataset.peer = peerId;
-        el.autoplay = true;
-        el.playsInline = true;
-        this.root.appendChild(el);
+      try {
+        const isLocalHost = this.isHost === true;
+        const hostPeerId = this.getHostPeerId();
+        const isFromHost = !!hostPeerId && peerId === hostPeerId;
+
+        // If I am a participant and this audio is from the host, do NOT create a separate <audio> element.
+        // We will merge host audio into the VideoPlayer's video element stream.
+        if (!isLocalHost && isFromHost) {
+          if (stream && stream.getAudioTracks && stream.getAudioTracks().length > 0) {
+            // Store/replace host mic stream (avoid duplicates)
+            this.upsertHostAudioStream(stream);
+            // Attempt to combine with the host video stream (if available)
+            this.combineAndAttachHostStreamsIfReady();
+          }
+          return;
+        }
+
+        // For all other participants' voice, keep existing behavior (separate <audio> per peer)
+        let el = this.root.querySelector(`audio[data-peer="${peerId}"]`);
+        if (!el) {
+          el = document.createElement('audio');
+          el.dataset.peer = peerId;
+          el.autoplay = true;
+          el.playsInline = true;
+          this.root.appendChild(el);
+        }
+        el.srcObject = stream;
+      } catch (e) {
+        console.error('Failed handling remote audio track:', e);
       }
-      el.srcObject = stream;
     };
 
     // Handle remote video tracks for participants
     this.peerManager.onRemoteVideoTrack = (peerId, stream) => {
-      console.log(`🎥 Received video stream from host`);
+      console.log(`🎥 Received video stream from peer ${peerId}`);
+
+      // If I'm a participant and this is from the host, store video stream and attach combined stream
+      const hostPeerId = this.getHostPeerId();
+      const isFromHost = !!hostPeerId && peerId === hostPeerId;
+      if (!this.isHost && isFromHost) {
+        this.remoteHostVideoStream = stream;
+        // Combine host video with any host audio streams (mic) and attach
+        this.combineAndAttachHostStreamsIfReady();
+        return;
+      }
+
+      // Fallback: non-host or unknown, attach video stream as-is
       this.handleRemoteVideoStream(peerId, stream);
     };
 
     // Hook participant-volume changes to adjust remote audio elements
     this.participantList.onVolumeChange = (socketId, volume) => {
+      const hostPeerId = this.getHostPeerId();
+      if (!this.isHost && socketId === hostPeerId) {
+        // Host movie+mic audio volume is controlled by VideoPlayer now
+        // Optionally, we could proxy this to videoPlayer.setVolume(volume)
+        return;
+      }
       const el = this.root.querySelector(`audio[data-peer="${socketId}"]`);
       if (el) el.volume = volume;
     };
@@ -135,6 +178,25 @@ export class RoomView {
 
     // Populate devices and bind audio controls
     this.populateMicDevices();
+
+    // --- AUTO-START VOICE FOR ALL USERS ON ROOM JOIN ---
+    // Start PeerManager/WebRTC immediately so host/participants get audio+video streams without manual click
+    // This ensures participants joining mid-stream are synced and see/hear the host right away
+    this.startVoice();
+
+    // Optionally, update the voice button to only allow stopping voice (no manual start)
+    const voiceBtn2 = this.root.querySelector('#toggle-voice');
+    if (voiceBtn2) {
+      voiceBtn2.textContent = 'Stop Voice';
+      voiceBtn2.disabled = false;
+      voiceBtn2.onclick = async () => {
+        if (this.voiceActive) {
+          this.stopVoice();
+          voiceBtn2.textContent = 'Voice Stopped';
+          voiceBtn2.disabled = true;
+        }
+      };
+    }
     const micToggle = this.root.querySelector('#mic-toggle');
     const applyBtn = this.root.querySelector('#apply-audio');
     micToggle?.addEventListener('click', () => this.toggleMic(micToggle));
@@ -488,6 +550,14 @@ export class RoomView {
         }
       });
       this.peerManager.onRemoteTrack = (peerId, stream) => {
+        // Respect the unified host media policy even after re-init
+        const hostPeerId = this.getHostPeerId();
+        const isFromHost = !!hostPeerId && peerId === hostPeerId;
+        if (!this.isHost && isFromHost) {
+          this.upsertHostAudioStream(stream);
+          this.combineAndAttachHostStreamsIfReady();
+          return;
+        }
         let el = this.root.querySelector(`audio[data-peer="${peerId}"]`);
         if (!el) {
           el = document.createElement('audio');
@@ -499,7 +569,11 @@ export class RoomView {
         el.srcObject = stream;
       };
     }
+    // Remove all non-host voice audio elements on stop; host audio is now merged into VideoPlayer
     this.root?.querySelectorAll('audio[data-peer]')?.forEach(el => el.remove());
+    // Reset merged host media state
+    this.remoteHostVideoStream = null;
+    this.remoteHostAudioStreams = [];
   }
 
   bindRoomParticipantEvents() {
@@ -509,7 +583,14 @@ export class RoomView {
         for (const p of participants) this.participants.set(p.socketId, p);
       } else if (participant) {
         this.participants.set(participant.socketId, participant);
-        if (this.voiceActive) this.peerManager.callPeer(participant.socketId).catch(() => {});
+        if (this.voiceActive) {
+          this.peerManager.callPeer(participant.socketId).catch(() => {});
+          // --- Ensure late joiners get the real video stream if host is streaming ---
+          if (this.isHost && this.peerManager.currentVideoStream) {
+            // Renegotiate to add video stream for the new participant
+            this.peerManager.renegotiatePeer(participant.socketId).catch(() => {});
+          }
+        }
       }
     };
     this._onLeft = ({ participant, participants }) => {
@@ -900,6 +981,103 @@ export class RoomView {
   }
 
   /**
+   * Identify current host peer id from participants map if available
+   */
+  getHostPeerId() {
+    // participants map stores objects with isHost flag according to server model
+    for (const [socketId, p] of this.participants.entries()) {
+      if (p && p.isHost) return socketId;
+    }
+    return null;
+  }
+
+  /**
+   * Maintain host mic audio streams list (avoid duplicates)
+   */
+  upsertHostAudioStream(stream) {
+    // Remove ended streams
+    this.remoteHostAudioStreams = this.remoteHostAudioStreams.filter(s =>
+      s && s.getTracks().some(t => t.readyState !== 'ended')
+    );
+
+    // Avoid adding the same stream twice
+    const exists = this.remoteHostAudioStreams.some(s => s.id === stream.id);
+    if (!exists) this.remoteHostAudioStreams.push(stream);
+  }
+
+  /**
+   * Combine host video stream + any host audio streams into a single MediaStream
+   * and attach to the participant VideoPlayer element
+   */
+  combineAndAttachHostStreamsIfReady() {
+    if (this.isHost) return; // host flow unchanged
+    if (!this.videoPlayer || !this.videoPlayer.videoElement) return;
+
+    // --- Force participant VideoPlayer to exit virtual mode and use real stream ---
+    if (this.videoPlayer && typeof this.videoPlayer.exitVirtualMode === 'function') {
+      this.videoPlayer.exitVirtualMode();
+    }
+
+    const videoStream = this.remoteHostVideoStream;
+
+    // Build a combined stream (can be audio-only if video not yet available)
+    const combined = new MediaStream();
+
+    // Add the single video track from host
+    if (videoStream) {
+      const vTracks = videoStream.getVideoTracks();
+      if (vTracks.length > 0) combined.addTrack(vTracks[0]);
+    }
+
+    // Add audio tracks: prefer videoStream audio (movie audio) and include host mic audio
+    if (videoStream) {
+      const movieAudioTracks = videoStream.getAudioTracks();
+      for (const a of movieAudioTracks) combined.addTrack(a);
+    }
+
+    for (const micStream of this.remoteHostAudioStreams) {
+      micStream.getAudioTracks().forEach(a => combined.addTrack(a));
+    }
+
+    // Attach to video element
+    const ve = this.videoPlayer.videoElement;
+    ve.srcObject = combined;
+    ve.autoplay = true;
+    ve.playsInline = true;
+    // Ensure VideoPlayer controls will manage volume/mute of this single element
+    ve.setAttribute('data-webrtc', 'true');
+
+    // Keep original duration metadata for UI
+    const originalDuration = this.videoPlayer.duration;
+    if (originalDuration && originalDuration > 0) {
+      const setDuration = () => {
+        try {
+          Object.defineProperty(ve, 'duration', {
+            value: originalDuration,
+            writable: false,
+            configurable: true
+          });
+          this.videoPlayer.duration = originalDuration;
+          this.videoPlayer.updateTimeDisplay();
+        } catch {}
+      };
+      if (ve.readyState >= 1) setDuration();
+      else ve.addEventListener('loadedmetadata', setDuration, { once: true });
+    }
+
+    // Remove any existing <audio> for the host to avoid duplicates
+    const hostPeerId = this.getHostPeerId();
+    if (hostPeerId) {
+      this.root?.querySelectorAll(`audio[data-peer="${hostPeerId}"]`)?.forEach(el => el.remove());
+    }
+
+    // Hide loading overlay
+    this.videoPlayer.hideLoadingOverlay();
+
+    console.log('✅ Host video+audio attached to participant VideoPlayer element');
+  }
+
+  /**
    * Show video streaming status indicator
    */
   showVideoStreamingStatus(isStreaming) {
@@ -976,23 +1154,39 @@ export class RoomView {
       case 'start-streaming':
         await this.handleHostStartedStreaming(movieState);
         break;
-        
+
       case 'play':
         this.handleHostPlay(movieState);
         break;
-        
+
       case 'pause':
         this.handleHostPause(movieState);
         break;
-        
+
       case 'seek':
         this.handleHostSeek(movieState);
         break;
-        
+
       case 'stop-streaming':
         this.handleHostStoppedStreaming();
         break;
-        
+
+      case 'sync':
+        // Treat 'sync' as a full state update: show video player, set movie info, and sync playback position
+        await this.handleHostStartedStreaming(movieState);
+        if (movieState && typeof movieState.currentTime === 'number') {
+          // Seek to the correct time and play/pause as needed
+          if (this.videoPlayer && this.videoPlayer.videoElement) {
+            this.videoPlayer.videoElement.currentTime = movieState.currentTime;
+            if (movieState.isPlaying) {
+              this.videoPlayer.videoElement.play();
+            } else {
+              this.videoPlayer.videoElement.pause();
+            }
+          }
+        }
+        break;
+
       default:
         console.warn('Unknown movie sync action:', action);
     }

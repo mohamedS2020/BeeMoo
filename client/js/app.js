@@ -32,12 +32,49 @@ export class App {
       return;
     }
 
+    // Check for persisted room session
+    const session = this.getPersistedRoomSession();
+    if (session && session.roomCode && session.username) {
+      // Try to auto-rejoin room
+      this.connectToServer();
+      this.socketClient.on('room-joined', (roomData) => {
+        this.currentRoom = roomData;
+        this.navigateToRoom(roomData);
+      });
+      this.socketClient.on('join-room-error', (err) => {
+        this.clearRoomSession();
+        this.render();
+      });
+      // Emit join-room after socket connects
+      this.socketClient.on('connect', () => {
+        this.socketClient.emit('join-room', {
+          roomCode: session.roomCode,
+          username: session.username
+        });
+      });
+      // Show loading UI
+      this.renderLoading('Rejoining room...');
+      this.initialized = true;
+      return;
+    }
+
     this.render();
     this.setupEventListeners();
     this.connectToServer();
     this.initialized = true;
     
     console.log('✅ BeeMoo app initialized successfully');
+  }
+
+  getPersistedRoomSession() {
+    try {
+      return JSON.parse(localStorage.getItem('beemoo-room-session'));
+    } catch { return null; }
+  }
+
+  renderLoading(msg) {
+    if (!this.appElement) return;
+    this.appElement.innerHTML = `<div class="beemoo-app"><div class="loading-overlay" style="display:flex;align-items:center;justify-content:center;height:100vh;"><div class="loading-content"><div class="loading-spinner"></div><div class="loading-text">${msg || 'Loading...'}</div></div></div></div>`;
   }
 
   render() {
@@ -254,22 +291,32 @@ export class App {
 
   handleRoomCreated(roomData) {
     console.log('🎉 Room created successfully:', roomData);
-    
-    // Store current room data
     this.currentRoom = roomData;
-    
-    // Navigate to room view scaffold
+    this.persistRoomSession(roomData);
     this.navigateToRoom(roomData);
   }
 
   handleRoomJoined(roomData) {
     console.log('🎉 Room joined successfully:', roomData);
-    
-    // Store current room data
     this.currentRoom = roomData;
-    
-    // Navigate to room view scaffold
+    this.persistRoomSession(roomData);
     this.navigateToRoom(roomData);
+  }
+
+  persistRoomSession(roomData) {
+    // Save minimal info for auto-rejoin
+    try {
+      const session = {
+        roomCode: roomData.roomCode,
+        username: roomData.user?.username,
+        isHost: !!roomData.user?.isHost
+      };
+      localStorage.setItem('beemoo-room-session', JSON.stringify(session));
+    } catch {}
+  }
+
+  clearRoomSession() {
+    try { localStorage.removeItem('beemoo-room-session'); } catch {}
   }
 
   navigateToRoom(roomData) {
