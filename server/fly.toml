@@ -1,0 +1,28 @@
+# fly.toml app configuration file generated for server-wandering-smoke-1053 on 2025-08-12T00:24:57+03:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'server-wandering-smoke-1053'
+primary_region = 'cdg'
+
+[build]
+
+[env]
+  CLIENT_URL = 'https://beemoo.vercel.app'
+  PORT = '3001'
+  app = 'beemoo'
+  primary_region = 'cdg'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
