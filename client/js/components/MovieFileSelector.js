@@ -317,10 +317,10 @@ export class MovieFileSelector {
       await this.simulateUpload();
       
       // Notify parent component that file is ready
+      // NOTE: We don't create a blob URL here because we're using MediaSource Extensions
       if (this.onFileSelected) {
         this.onFileSelected({
           file: this.selectedFile,
-          url: URL.createObjectURL(this.selectedFile), // Create blob URL for local playback
           type: this.selectedFile.type,
           size: this.selectedFile.size,
           name: this.selectedFile.name

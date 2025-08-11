@@ -68,7 +68,19 @@ export class VideoPlayer {
     
     this.streamingManager.on('error', (error) => {
       console.error('❌ Streaming error:', error);
-      this.showError('Streaming error: ' + error.message);
+      
+      let errorMessage = 'Streaming error: ' + error.message;
+      
+      // Provide more specific error messages for common issues
+      if (error.message && error.message.includes('MediaSource')) {
+        errorMessage = 'Video file format error: This video file may not be compatible with browser streaming. Try a different MP4 file or convert to a web-optimized format.';
+      } else if (error.message && error.message.includes('SourceBuffer')) {
+        errorMessage = 'Video streaming failed: There was a problem loading the video data. Please try again or use a smaller file.';
+      } else if (error.message && error.message.includes('Format error')) {
+        errorMessage = 'Video format error: This video format is not supported. Please use an MP4 file with H.264 video and AAC audio.';
+      }
+      
+      this.showError(errorMessage);
     });
   }
   
@@ -89,17 +101,43 @@ export class VideoPlayer {
     this.setupEventListeners();
     
     try {
-      // Initialize streaming
-      console.log('🎬 Initializing video player with file:', file.name);
-      await this.streamingManager.initializeStreaming(file, this.videoElement, {
+      // Initialize streaming with enhanced logging and error handling
+      console.log('🎬 Initializing video player with file:', {
+        name: file.name,
+        size: this.formatBytes(file.size),
+        type: file.type
+      });
+      
+      // Show loading with more specific status
+      this.updateLoadingStatus('Analyzing video file...');
+      
+      const streamingResult = await this.streamingManager.initializeStreaming(file, this.videoElement, {
         chunkSize: this.calculateOptimalChunkSize(file.size),
         bufferTimeAhead: 30
       });
       
+      console.log('🎬 Streaming initialization completed:', streamingResult);
+      
+      // Update loading status
+      this.updateLoadingStatus('Loading video metadata...');
+      
+      // Wait a moment for metadata to load
+      await this.waitForMetadata(5000); // 5 second timeout
+      
       this.isInitialized = true;
       this.updatePlayerState();
       
-      console.log('✅ Video player initialized successfully');
+      console.log('✅ Video player initialized successfully:', {
+        duration: this.duration,
+        width: this.videoElement.videoWidth,
+        height: this.videoElement.videoHeight,
+        readyState: this.videoElement.readyState
+      });
+      
+      // Hide loading overlay if metadata is loaded
+      if (this.duration && !isNaN(this.duration)) {
+        this.hideLoadingOverlay();
+      }
       
     } catch (error) {
       console.error('❌ Failed to initialize video player:', error);
@@ -134,10 +172,12 @@ export class VideoPlayer {
     this.videoElement = this.container.querySelector('#video-element');
     this.controlsContainer = this.container.querySelector('#video-controls');
     
-    // Setup video element attributes
+    // Setup video element attributes for optimal MSE streaming
     this.videoElement.playsInline = true;
-    this.videoElement.preload = 'none';
+    this.videoElement.preload = 'metadata'; // Changed from 'none' to help with metadata loading
     this.videoElement.controls = false; // We'll use custom controls
+    this.videoElement.muted = false; // Ensure not muted by default
+    this.videoElement.autoplay = false; // Explicit control over playback
   }
   
   /**
@@ -261,11 +301,42 @@ export class VideoPlayer {
    * Setup event listeners for controls and video
    */
   setupEventListeners() {
-    // Video element events
+    // Video element events with improved metadata handling
     this.videoElement.addEventListener('loadedmetadata', () => {
+      console.log('🎬 Video metadata loaded:', {
+        duration: this.videoElement.duration,
+        width: this.videoElement.videoWidth,
+        height: this.videoElement.videoHeight,
+        readyState: this.videoElement.readyState
+      });
+      
       this.duration = this.videoElement.duration;
       this.updateTimeDisplay();
       this.hideLoadingOverlay();
+      this.emit('metadata-loaded', {
+        duration: this.duration,
+        width: this.videoElement.videoWidth,
+        height: this.videoElement.videoHeight
+      });
+    });
+    
+    // Additional metadata loading events for better reliability
+    this.videoElement.addEventListener('loadeddata', () => {
+      console.log('🎬 Video data loaded, readyState:', this.videoElement.readyState);
+      if (this.videoElement.duration && !isNaN(this.videoElement.duration)) {
+        this.duration = this.videoElement.duration;
+        this.updateTimeDisplay();
+        this.hideLoadingOverlay();
+      }
+    });
+    
+    this.videoElement.addEventListener('durationchange', () => {
+      console.log('🎬 Video duration changed:', this.videoElement.duration);
+      if (this.videoElement.duration && !isNaN(this.videoElement.duration)) {
+        this.duration = this.videoElement.duration;
+        this.updateTimeDisplay();
+        this.hideLoadingOverlay();
+      }
     });
     
     this.videoElement.addEventListener('play', () => {
@@ -772,6 +843,58 @@ export class VideoPlayer {
       fileName: this.currentFile?.name || null,
       fileSize: this.currentFile?.size || 0
     };
+  }
+  
+  /**
+   * Wait for video metadata to load
+   */
+  async waitForMetadata(timeout = 5000) {
+    return new Promise((resolve) => {
+      // If metadata is already loaded, resolve immediately
+      if (this.videoElement.duration && !isNaN(this.videoElement.duration)) {
+        console.log('🎬 Metadata already loaded');
+        resolve();
+        return;
+      }
+      
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ Metadata loading timeout, continuing anyway...');
+        resolve();
+      }, timeout);
+      
+      const onMetadataLoaded = () => {
+        console.log('🎬 Metadata loaded during wait');
+        clearTimeout(timeoutId);
+        resolve();
+      };
+      
+      this.videoElement.addEventListener('loadedmetadata', onMetadataLoaded, { once: true });
+      this.videoElement.addEventListener('durationchange', onMetadataLoaded, { once: true });
+      this.videoElement.addEventListener('loadeddata', onMetadataLoaded, { once: true });
+    });
+  }
+  
+  /**
+   * Update loading overlay status text
+   */
+  updateLoadingStatus(status) {
+    const loadingText = this.container.querySelector('.loading-text');
+    if (loadingText) {
+      loadingText.textContent = status;
+    }
+  }
+  
+  /**
+   * Format bytes to human readable format
+   */
+  formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
   
   /**

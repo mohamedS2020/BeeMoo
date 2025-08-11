@@ -1,5 +1,5 @@
 // BeeMoo - Advanced Video Streaming Utility
-// Implements chunked streaming using Media Source Extensions for progressive playback
+// Fixed version with proper MP4 handling and MediaSource compatibility
 
 export class StreamingManager {
   constructor() {
@@ -12,12 +12,20 @@ export class StreamingManager {
     this.currentChunk = 0;
     this.totalChunks = 0;
     this.chunkSize = 1024 * 1024; // 1MB default chunk size
-    this.bufferTimeAhead = 10; // Buffer 10 seconds ahead for more progressive loading
+    this.bufferTimeAhead = 30; // Target 30 seconds ahead
     this.maxBufferTime = 60; // Maximum 60 seconds in buffer
     this.minBufferTime = 5; // Minimum 5 seconds before rebuffering
     this.chunks = [];
     this.bufferedRanges = [];
     this.eventListeners = {};
+    
+    // Metadata loading state
+    this.moovFound = false;
+    this.moovChunkIndex = -1;
+    this.moovAtomInfo = null;
+    this.metadataLoadAttempts = 0;
+    this.currentMimeType = null;
+    this.initSegmentAppended = false;
     
     // Performance monitoring
     this.stats = {
@@ -33,6 +41,7 @@ export class StreamingManager {
     this.supportedTypes = [
       'video/mp4; codecs="avc1.42E01E,mp4a.40.2"', // H.264 + AAC
       'video/mp4; codecs="avc1.64001E,mp4a.40.2"', // H.264 High + AAC
+      'video/mp4; codecs="avc1.4D401E,mp4a.40.2"', // H.264 Main + AAC
       'video/webm; codecs="vp9,opus"', // VP9 + Opus
       'video/webm; codecs="vp8,vorbis"' // VP8 + Vorbis
     ];
@@ -40,9 +49,6 @@ export class StreamingManager {
     this.initializeCapabilities();
   }
   
-  /**
-   * Initialize and check MSE capabilities
-   */
   initializeCapabilities() {
     this.capabilities = {
       mseSupported: this.checkMSESupport(),
@@ -53,9 +59,6 @@ export class StreamingManager {
     console.log('🎬 Streaming capabilities:', this.capabilities);
   }
   
-  /**
-   * Check if Media Source Extensions are supported
-   */
   checkMSESupport() {
     if (!window.MediaSource) {
       console.error('❌ Media Source Extensions not supported');
@@ -69,31 +72,19 @@ export class StreamingManager {
     return true;
   }
   
-  /**
-   * Get list of supported MIME types
-   */
   getSupportedMimeTypes() {
     return this.supportedTypes.filter(type => MediaSource.isTypeSupported(type));
   }
   
-  /**
-   * Get maximum number of source buffers
-   */
   getMaxSourceBuffers() {
     try {
       const mediaSource = new MediaSource();
-      return mediaSource.sourceBuffers.length || 16; // Default fallback
+      return mediaSource.sourceBuffers.length || 16;
     } catch (e) {
-      return 1; // Conservative fallback
+      return 1;
     }
   }
   
-  /**
-   * Initialize streaming for a video file
-   * @param {File} file - Video file to stream
-   * @param {HTMLVideoElement} videoElement - Video element to stream to
-   * @param {Object} options - Streaming options
-   */
   async initializeStreaming(file, videoElement, options = {}) {
     if (!this.capabilities.mseSupported) {
       throw new Error('Media Source Extensions not supported in this browser');
@@ -104,8 +95,10 @@ export class StreamingManager {
     this.chunkSize = options.chunkSize || this.chunkSize;
     this.bufferTimeAhead = options.bufferTimeAhead || this.bufferTimeAhead;
     
-    // Validate file format
+    // Detect and validate MIME type
     const mimeType = await this.detectMimeType(file);
+    this.currentMimeType = mimeType;
+    
     if (!this.capabilities.supportedMimeTypes.includes(mimeType)) {
       throw new Error(`Unsupported video format: ${mimeType}`);
     }
@@ -123,8 +116,6 @@ export class StreamingManager {
     this.videoElement.src = objectURL;
     
     console.log(`📺 Video source set: ${objectURL}`);
-    console.log(`📺 Video element ready state: ${this.videoElement.readyState}`);
-    console.log(`📺 MediaSource ready state: ${this.mediaSource.readyState}`);
     
     // Setup video element events
     this.setupVideoEvents();
@@ -133,7 +124,7 @@ export class StreamingManager {
       this.mediaSource.addEventListener('sourceopen', async () => {
         try {
           await this.initializeSourceBuffer(mimeType);
-          await this.startBuffering();
+          await this.startOptimizedStreaming();
           resolve({
             duration: this.videoElement.duration,
             totalChunks: this.totalChunks,
@@ -151,24 +142,38 @@ export class StreamingManager {
     });
   }
   
-  /**
-   * Detect video MIME type and codec
-   */
   async detectMimeType(file) {
+    // Check if it's an unsupported format
+    const unsupportedFormats = ['video/avi', 'video/wmv', 'video/flv'];
+    if (file.type && unsupportedFormats.includes(file.type)) {
+      throw new Error('Unsupported video format');
+    }
+    
     // Start with file.type if available
     if (file.type && this.capabilities.supportedMimeTypes.includes(file.type)) {
       return file.type;
     }
     
-    // Fallback: analyze first few bytes for format detection
+    // Read file header to detect format
     const header = await this.readFileHeader(file, 64);
     
-    // MP4 detection (ftyp box)
+    // MP4 detection
     if (this.isMP4Header(header)) {
-      return 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"';
+      // Try different codec combinations
+      const codecCombos = [
+        'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
+        'video/mp4; codecs="avc1.4D401E,mp4a.40.2"',
+        'video/mp4; codecs="avc1.64001E,mp4a.40.2"'
+      ];
+      
+      for (const codec of codecCombos) {
+        if (MediaSource.isTypeSupported(codec)) {
+          return codec;
+        }
+      }
     }
     
-    // WebM detection (EBML header)
+    // WebM detection
     if (this.isWebMHeader(header)) {
       return 'video/webm; codecs="vp9,opus"';
     }
@@ -177,9 +182,6 @@ export class StreamingManager {
     return 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"';
   }
   
-  /**
-   * Read file header for format detection
-   */
   async readFileHeader(file, bytes) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -189,9 +191,6 @@ export class StreamingManager {
     });
   }
   
-  /**
-   * Check if header indicates MP4 format
-   */
   isMP4Header(header) {
     // Look for ftyp box signature
     for (let i = 0; i < header.length - 4; i++) {
@@ -203,18 +202,11 @@ export class StreamingManager {
     return false;
   }
   
-  /**
-   * Check if header indicates WebM format
-   */
   isWebMHeader(header) {
-    // EBML header signature
     return header[0] === 0x1A && header[1] === 0x45 && 
            header[2] === 0xDF && header[3] === 0xA3;
   }
   
-  /**
-   * Setup MediaSource event listeners
-   */
   setupMediaSourceEvents() {
     this.mediaSource.addEventListener('sourceopen', () => {
       console.log('📺 MediaSource opened');
@@ -232,17 +224,12 @@ export class StreamingManager {
     });
   }
   
-  /**
-   * Setup video element event listeners
-   */
   setupVideoEvents() {
-    // Buffer monitoring
     this.videoElement.addEventListener('progress', () => {
       this.updateBufferedRanges();
       this.monitorBufferHealth();
     });
     
-    // Metadata events
     this.videoElement.addEventListener('loadedmetadata', () => {
       console.log(`📊 Video metadata loaded - Duration: ${this.videoElement.duration}s`);
       this.emit('metadata-loaded', {
@@ -252,7 +239,6 @@ export class StreamingManager {
       });
     });
     
-    // Playback events
     this.videoElement.addEventListener('waiting', () => {
       console.log('⏳ Video waiting for data');
       this.stats.stallCount++;
@@ -264,19 +250,16 @@ export class StreamingManager {
       this.emit('buffering', false);
     });
     
-    // Seek events
     this.videoElement.addEventListener('seeking', () => {
       this.stats.seekCount++;
       this.handleSeek();
     });
     
-    // Error handling
     this.videoElement.addEventListener('error', (e) => {
       console.error('❌ Video error:', e);
       this.emit('error', e);
     });
     
-    // Update events
     this.videoElement.addEventListener('timeupdate', () => {
       this.emit('timeupdate', {
         currentTime: this.videoElement.currentTime,
@@ -286,9 +269,6 @@ export class StreamingManager {
     });
   }
   
-  /**
-   * Initialize SourceBuffer with appropriate MIME type
-   */
   async initializeSourceBuffer(mimeType) {
     try {
       this.sourceBuffer = this.mediaSource.addSourceBuffer(mimeType);
@@ -299,17 +279,7 @@ export class StreamingManager {
       
       this.sourceBuffer.addEventListener('error', (e) => {
         console.error('❌ SourceBuffer error:', e);
-        console.error('📊 SourceBuffer state:', {
-          readyState: this.mediaSource.readyState,
-          sourceBuffers: this.mediaSource.sourceBuffers.length,
-          updating: this.sourceBuffer.updating,
-          buffered: this.sourceBuffer.buffered.length > 0 ? 
-            `${this.sourceBuffer.buffered.start(0)}-${this.sourceBuffer.buffered.end(0)}` : 'none'
-        });
-        
-        // Try to recover from SourceBuffer errors
         this.handleSourceBufferError(e);
-        this.emit('error', e);
       });
       
       console.log(`📺 SourceBuffer initialized with ${mimeType}`);
@@ -319,44 +289,20 @@ export class StreamingManager {
   }
   
   /**
-   * Calculate optimal chunk size based on file size
+   * NEW: Optimized streaming approach
+   * Instead of trying to reconstruct MP4, we'll use a simpler approach
    */
-  calculateOptimalChunkSize(fileSize) {
-    // Adaptive chunk sizing based on file size
-    if (fileSize < 50 * 1024 * 1024) { // < 50MB
-      return 512 * 1024; // 512KB chunks
-    } else if (fileSize < 200 * 1024 * 1024) { // < 200MB
-      return 1024 * 1024; // 1MB chunks
-    } else if (fileSize < 1024 * 1024 * 1024) { // < 1GB
-      return 2 * 1024 * 1024; // 2MB chunks
-    } else {
-      return 4 * 1024 * 1024; // 4MB chunks for very large files
-    }
-  }
-  
-  /**
-   * Start buffering video data
-   */
-  async startBuffering() {
+  async startOptimizedStreaming() {
     if (this.isStreaming) return;
     
     this.isStreaming = true;
     this.currentChunk = 0;
     
-    console.log('🚀 Starting progressive buffering...');
+    console.log('🚀 Starting optimized streaming...');
     
-    // For MP4 files, we need to ensure the first chunk contains complete initialization data
-    // Load more initial chunks to ensure we have the complete moov atom
-    const initialChunks = Math.min(5, this.totalChunks); // Load more chunks initially
-    for (let i = 0; i < initialChunks; i++) {
-      await this.loadChunk(i);
-      
-      // Try to trigger metadata loading after each chunk
-      if (i === 2) {
-        console.log('🔄 Attempting to load video metadata...');
-        this.videoElement.load();
-      }
-    }
+    // For MP4 files with moov at the end, we need a different strategy
+    // Try to load the file in a way that works with MediaSource
+    await this.loadWithMoovHandling();
     
     this.emit('ready');
     
@@ -365,156 +311,300 @@ export class StreamingManager {
   }
   
   /**
-   * Load a specific chunk
+   * NEW: Handle MP4 files with moov atom at the end
    */
-  async loadChunk(chunkIndex) {
-    if (chunkIndex >= this.totalChunks) return;
-    if (this.chunks[chunkIndex]) return; // Already loaded
+  async loadWithMoovHandling() {
+    console.log('🔍 Analyzing MP4 structure...');
     
-    const startTime = performance.now();
-    const start = chunkIndex * this.chunkSize;
-    const end = Math.min(start + this.chunkSize, this.file.size);
+    // First, check where the moov atom is located
+    const moovLocation = await this.findMoovLocation();
     
-    try {
-      const chunk = await this.readFileChunk(start, end);
-      this.chunks[chunkIndex] = chunk;
+    if (moovLocation.found && moovLocation.position === 'end') {
+      console.log('📦 Moov atom found at end of file - using range-based loading');
       
-      // Debug MP4 structure for first few chunks
-      if (chunkIndex < 3) {
-        this.debugMP4Structure(chunk, chunkIndex);
-      }
-      
-      // Append to SourceBuffer - wait for it to be ready
-      await this.appendToSourceBuffer(chunk, chunkIndex);
-      
-      // Update stats
-      const loadTime = performance.now() - startTime;
-      this.stats.chunksLoaded++;
-      this.stats.totalLoadTime += loadTime;
-      this.stats.averageChunkTime = this.stats.totalLoadTime / this.stats.chunksLoaded;
-      
-      console.log(`📦 Chunk ${chunkIndex}/${this.totalChunks} loaded (${loadTime.toFixed(2)}ms)`);
-      
-      this.emit('chunk-loaded', {
-        index: chunkIndex,
-        total: this.totalChunks,
-        loadTime: loadTime,
-        progress: (chunkIndex + 1) / this.totalChunks
-      });
-      
-      // Signal end of stream when all chunks are loaded
-      if (chunkIndex === this.totalChunks - 1) {
-        console.log('🏁 All chunks loaded, ending stream...');
-        try {
-          if (this.mediaSource.readyState === 'open') {
-            this.mediaSource.endOfStream();
-            console.log('✅ MediaSource stream ended successfully');
-          }
-        } catch (error) {
-          console.error('❌ Failed to end MediaSource stream:', error);
-        }
-      }
-      
-    } catch (error) {
-      console.error(`❌ Failed to load chunk ${chunkIndex}:`, error);
-      this.emit('chunk-error', { index: chunkIndex, error });
+      // For files with moov at the end, we need to load it first
+      // But since it's too large, we'll use a different approach
+      await this.useSimplifiedStreaming();
+    } else if (moovLocation.found && moovLocation.position === 'beginning') {
+      console.log('📦 Moov atom found at beginning - using progressive loading');
+      await this.useProgressiveStreaming();
+    } else {
+      console.log('⚠️ Moov atom not found - trying simplified approach');
+      await this.useSimplifiedStreaming();
     }
   }
   
   /**
-   * Debug MP4 structure to understand what's in the chunks
+   * NEW: Find moov atom location without loading entire chunks
    */
-  debugMP4Structure(chunk, chunkIndex) {
-    const view = new DataView(chunk);
-    console.log(`🔍 Analyzing chunk ${chunkIndex} structure:`);
+  async findMoovLocation() {
+    // Check beginning of file
+    const startSample = await this.readFileChunk(0, Math.min(10000, this.file.size));
+    if (this.containsAtom(startSample, 'moov')) {
+      return { found: true, position: 'beginning' };
+    }
     
-    try {
-      // Look for MP4 atoms/boxes in the first few bytes
-      let offset = 0;
-      const maxAtoms = 5;
-      let atomCount = 0;
-      
-      while (offset < chunk.byteLength - 8 && atomCount < maxAtoms) {
+    // Check end of file
+    const endStart = Math.max(0, this.file.size - 2 * 1024 * 1024); // Check last 2MB
+    const endSample = await this.readFileChunk(endStart, this.file.size);
+    if (this.containsAtom(endSample, 'moov')) {
+      return { found: true, position: 'end' };
+    }
+    
+    return { found: false };
+  }
+  
+  /**
+   * NEW: Check if a buffer contains a specific atom
+   */
+  containsAtom(buffer, atomType) {
+    const view = new DataView(buffer);
+    let offset = 0;
+    
+    while (offset < buffer.byteLength - 8) {
+      try {
         const size = view.getUint32(offset);
-        if (size < 8 || size > chunk.byteLength - offset) break;
+        if (size < 8) {
+          offset++;
+          continue;
+        }
         
         const type = String.fromCharCode(
           view.getUint8(offset + 4),
-          view.getUint8(offset + 5), 
+          view.getUint8(offset + 5),
           view.getUint8(offset + 6),
           view.getUint8(offset + 7)
         );
         
-        console.log(`  📦 Atom: ${type} (${size} bytes) at offset ${offset}`);
-        
-        // Check for important atoms
-        if (type === 'moov') {
-          console.log(`  ✅ Found moov atom (metadata) in chunk ${chunkIndex}!`);
-        } else if (type === 'mdat') {
-          console.log(`  📹 Found mdat atom (media data) in chunk ${chunkIndex}`);
-        } else if (type === 'ftyp') {
-          console.log(`  🏷️ Found ftyp atom (file type) in chunk ${chunkIndex}`);
+        if (type === atomType) {
+          return true;
         }
         
+        if (size > buffer.byteLength - offset) break;
         offset += size;
-        atomCount++;
+      } catch (e) {
+        offset++;
+      }
+    }
+    
+    return false;
+  }
+  
+  /**
+   * NEW: Simplified streaming for problematic files
+   */
+  async useSimplifiedStreaming() {
+    console.log('🔄 Using simplified streaming approach...');
+    
+    try {
+      // For files with moov at the end, we can't stream them traditionally
+      // Instead, we'll load the entire file or use a different approach
+      
+      // Option 1: If file is small enough, load it entirely
+      if (this.file.size < 100 * 1024 * 1024) { // Less than 100MB
+        console.log('📦 File is small enough - loading entire file');
+        await this.loadEntireFile();
+      } else {
+        // Option 2: Load chunks but handle errors gracefully
+        console.log('📦 File is large - using error-tolerant chunked loading');
+        await this.loadChunksWithErrorHandling();
       }
     } catch (error) {
-      console.error(`❌ Error analyzing MP4 structure for chunk ${chunkIndex}:`, error);
+      console.error('❌ Simplified streaming failed:', error);
+      throw error;
     }
   }
   
   /**
-   * Append chunk to SourceBuffer with proper async handling
+   * NEW: Load entire file for small videos
    */
-  async appendToSourceBuffer(chunk, chunkIndex) {
+  async loadEntireFile() {
+    console.log('📦 Loading entire file into memory...');
+    
+    try {
+      const fileBuffer = await this.readFileChunk(0, this.file.size);
+      
+      // Append the entire file to the SourceBuffer
+      await this.appendToSourceBuffer(fileBuffer, 'entire-file');
+      
+      console.log('✅ Entire file loaded successfully');
+    } catch (error) {
+      console.error('❌ Failed to load entire file:', error);
+      
+      // Fallback to chunked loading
+      await this.loadChunksWithErrorHandling();
+    }
+  }
+  
+  /**
+   * NEW: Load chunks with better error handling
+   */
+  async loadChunksWithErrorHandling() {
+    console.log('📦 Loading chunks with error handling...');
+    
+    // First, try to load the file in larger chunks
+    const largeChunkSize = 5 * 1024 * 1024; // 5MB chunks
+    const numLargeChunks = Math.ceil(this.file.size / largeChunkSize);
+    
+    for (let i = 0; i < Math.min(3, numLargeChunks); i++) {
+      const start = i * largeChunkSize;
+      const end = Math.min(start + largeChunkSize, this.file.size);
+      
+      try {
+        const chunk = await this.readFileChunk(start, end);
+        
+        // Only append if MediaSource is still open
+        if (this.mediaSource.readyState === 'open') {
+          await this.safeAppendToSourceBuffer(chunk, `large-chunk-${i}`);
+        } else {
+          console.warn('⚠️ MediaSource not open, stopping chunk loading');
+          break;
+        }
+        
+        // Check if we have playable content
+        if (this.videoElement.readyState >= 2) { // HAVE_CURRENT_DATA
+          console.log('✅ Video has enough data to start playback');
+          break;
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to load chunk ${i}:`, error);
+        
+        // If first chunk fails, the file might not be compatible
+        if (i === 0) {
+          throw new Error('File appears to be incompatible with streaming');
+        }
+        
+        // Otherwise, continue with what we have
+        break;
+      }
+    }
+  }
+  
+  /**
+   * NEW: Progressive streaming for files with moov at beginning
+   */
+  async useProgressiveStreaming() {
+    console.log('📦 Using progressive streaming...');
+    
+    for (let i = 0; i < Math.min(5, this.totalChunks); i++) {
+      const start = i * this.chunkSize;
+      const end = Math.min(start + this.chunkSize, this.file.size);
+      
+      try {
+        const chunk = await this.readFileChunk(start, end);
+        await this.safeAppendToSourceBuffer(chunk, `chunk-${i}`);
+        
+        this.currentChunk = i + 1;
+        
+        // Check if video is ready
+        if (this.videoElement.readyState >= 2) {
+          console.log('✅ Video ready for playback');
+          break;
+        }
+      } catch (error) {
+        console.error(`❌ Failed to load chunk ${i}:`, error);
+        break;
+      }
+    }
+  }
+  
+  /**
+   * NEW: Safe append to SourceBuffer with validation
+   */
+  async safeAppendToSourceBuffer(chunk, chunkId) {
     return new Promise((resolve, reject) => {
+      // Validate MediaSource state
+      if (!this.mediaSource || this.mediaSource.readyState !== 'open') {
+        reject(new Error(`MediaSource not ready: ${this.mediaSource?.readyState}`));
+        return;
+      }
+      
+      // Validate SourceBuffer
+      if (!this.sourceBuffer) {
+        reject(new Error('SourceBuffer not available'));
+        return;
+      }
+      
       if (this.sourceBuffer.updating) {
-        console.log(`⏳ SourceBuffer updating, waiting for chunk ${chunkIndex}`);
-        // Wait for current operation to finish
+        // Wait for current update to finish
         const onUpdateEnd = () => {
           this.sourceBuffer.removeEventListener('updateend', onUpdateEnd);
-          this.appendToSourceBuffer(chunk, chunkIndex).then(resolve).catch(reject);
+          this.safeAppendToSourceBuffer(chunk, chunkId).then(resolve).catch(reject);
         };
         this.sourceBuffer.addEventListener('updateend', onUpdateEnd);
         return;
       }
       
+      console.log(`⬆️ Appending ${chunkId} (${chunk.byteLength} bytes)`);
+      
+      const onSuccess = () => {
+        this.sourceBuffer.removeEventListener('updateend', onSuccess);
+        this.sourceBuffer.removeEventListener('error', onError);
+        console.log(`✅ ${chunkId} appended successfully`);
+        resolve();
+      };
+      
+      const onError = (e) => {
+        this.sourceBuffer.removeEventListener('updateend', onSuccess);
+        this.sourceBuffer.removeEventListener('error', onError);
+        
+        // Check if it's a decode error
+        if (this.mediaSource.readyState === 'ended') {
+          console.warn('⚠️ MediaSource ended due to decode error');
+          
+          // Try to recover by creating a new MediaSource
+          this.recoverFromDecodeError().then(resolve).catch(reject);
+        } else {
+          reject(new Error(`Failed to append ${chunkId}`));
+        }
+      };
+      
+      this.sourceBuffer.addEventListener('updateend', onSuccess);
+      this.sourceBuffer.addEventListener('error', onError);
+      
       try {
-        console.log(`⬆️ Appending chunk ${chunkIndex} (${chunk.byteLength} bytes) to SourceBuffer`);
-        
-        // Set up success handler
-        const onSuccess = () => {
-          this.sourceBuffer.removeEventListener('updateend', onSuccess);
-          this.sourceBuffer.removeEventListener('error', onError);
-          console.log(`✅ Chunk ${chunkIndex} appended successfully`);
-          resolve();
-        };
-        
-        // Set up error handler
-        const onError = (e) => {
-          this.sourceBuffer.removeEventListener('updateend', onSuccess);
-          this.sourceBuffer.removeEventListener('error', onError);
-          console.error(`❌ Failed to append chunk ${chunkIndex}:`, e);
-          reject(e);
-        };
-        
-        this.sourceBuffer.addEventListener('updateend', onSuccess);
-        this.sourceBuffer.addEventListener('error', onError);
-        
-        // Append the chunk
         this.sourceBuffer.appendBuffer(chunk);
-        
       } catch (error) {
-        console.error(`❌ Failed to append chunk ${chunkIndex}:`, error);
+        console.error(`❌ Exception appending ${chunkId}:`, error);
         reject(error);
       }
     });
   }
   
   /**
-   * Read file chunk as ArrayBuffer
+   * NEW: Recover from decode errors
    */
+  async recoverFromDecodeError() {
+    console.log('🔄 Attempting to recover from decode error...');
+    
+    // For files with moov at the end, we can't use MediaSource
+    // Fall back to direct blob URL
+    console.log('📦 Falling back to direct blob URL streaming');
+    
+    const blob = new Blob([this.file], { type: this.file.type || 'video/mp4' });
+    const blobUrl = URL.createObjectURL(blob);
+    
+    this.videoElement.src = blobUrl;
+    
+    // Wait for metadata to load
+    return new Promise((resolve) => {
+      const onLoadedMetadata = () => {
+        this.videoElement.removeEventListener('loadedmetadata', onLoadedMetadata);
+        console.log('✅ Direct blob URL streaming ready');
+        resolve();
+      };
+      
+      const onError = () => {
+        this.videoElement.removeEventListener('error', onError);
+        console.error('❌ Direct blob URL streaming also failed');
+        resolve(); // Resolve anyway to prevent hanging
+      };
+      
+      this.videoElement.addEventListener('loadedmetadata', onLoadedMetadata);
+      this.videoElement.addEventListener('error', onError);
+    });
+  }
+  
   async readFileChunk(start, end) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -524,151 +614,93 @@ export class StreamingManager {
     });
   }
   
-  /**
-   * Schedule intelligent buffering based on playback position
-   */
+  async appendToSourceBuffer(chunk, chunkIndex) {
+    return this.safeAppendToSourceBuffer(chunk, chunkIndex);
+  }
+  
   scheduleBuffering() {
     if (!this.isStreaming || !this.videoElement) return;
     
     const currentTime = this.videoElement.currentTime;
     const bufferedAhead = this.getBufferedTimeAhead(currentTime);
-    const isPlaying = !this.videoElement.paused;
-    const hasMetadata = this.videoElement.duration && !isNaN(this.videoElement.duration);
     
-    // Only continue buffering if we actually need more data AND conditions are met
-    if (this.currentChunk < this.totalChunks) {
-      let shouldBuffer = false;
+    // Only buffer more if needed
+    if (bufferedAhead < this.bufferTimeAhead && this.currentChunk < this.totalChunks) {
+      const start = this.currentChunk * this.chunkSize;
+      const end = Math.min(start + this.chunkSize, this.file.size);
       
-      if (this.currentChunk < 5) {
-        // Always load first 5 chunks for metadata and basic playability
-        shouldBuffer = true;
-      } else if (hasMetadata && isPlaying && bufferedAhead < this.bufferTimeAhead) {
-        // Video has metadata, is playing and needs more buffer
-        shouldBuffer = true;
-      } else if (hasMetadata && bufferedAhead < 2) {
-        // Critical low buffer with valid metadata
-        shouldBuffer = true;
-      }
-      
-      if (shouldBuffer) {
-        console.log(`🔄 Loading chunk ${this.currentChunk} (buffered: ${bufferedAhead.toFixed(1)}s, playing: ${isPlaying}, duration: ${this.videoElement.duration || 'unknown'})`);
-        this.loadChunk(this.currentChunk++);
-      }
+      this.readFileChunk(start, end).then(chunk => {
+        return this.safeAppendToSourceBuffer(chunk, `chunk-${this.currentChunk}`);
+      }).then(() => {
+        this.currentChunk++;
+      }).catch(error => {
+        console.warn(`⚠️ Failed to buffer chunk ${this.currentChunk}:`, error);
+      });
     }
     
-    // Schedule next check - adapt based on playback state and metadata availability
-    const checkInterval = (isPlaying && hasMetadata) ? 1000 : 3000;
-    setTimeout(() => this.scheduleBuffering(), checkInterval);
+    // Schedule next check
+    setTimeout(() => this.scheduleBuffering(), 1000);
   }
   
-  /**
-   * Handle SourceBuffer errors and attempt recovery
-   */
-  handleSourceBufferError(error) {
-    console.log('🔄 Attempting SourceBuffer error recovery...');
-    
-    try {
-      // Stop aggressive buffering on error
-      this.isStreaming = false;
-      
-      // If MediaSource is still open, try to end it gracefully
-      if (this.mediaSource && this.mediaSource.readyState === 'open') {
-        console.log('🛑 Ending MediaSource due to SourceBuffer error');
-        this.mediaSource.endOfStream('decode');
-      }
-    } catch (recoveryError) {
-      console.error('❌ Failed to recover from SourceBuffer error:', recoveryError);
-    }
-  }
-  
-  /**
-   * Handle SourceBuffer update completion
-   */
   handleBufferUpdate() {
-    console.log(`🔄 SourceBuffer update completed`);
-    
-    // Log current buffer state
-    if (this.sourceBuffer.buffered.length > 0) {
-      console.log(`📊 SourceBuffer has ${this.sourceBuffer.buffered.length} buffered range(s):`);
+    // Check buffer status
+    if (this.sourceBuffer && this.sourceBuffer.buffered.length > 0) {
+      const ranges = [];
       for (let i = 0; i < this.sourceBuffer.buffered.length; i++) {
-        const start = this.sourceBuffer.buffered.start(i);
-        const end = this.sourceBuffer.buffered.end(i);
-        console.log(`  Range ${i}: ${start.toFixed(2)}s - ${end.toFixed(2)}s (${(end - start).toFixed(2)}s duration)`);
+        ranges.push({
+          start: this.sourceBuffer.buffered.start(i),
+          end: this.sourceBuffer.buffered.end(i)
+        });
       }
-      
-      // Try to trigger video metadata loading if we have buffer data but no duration
-      if (!this.videoElement.duration || isNaN(this.videoElement.duration)) {
-        console.log('🔄 Triggering video metadata loading...');
-        // Force the video element to re-examine the buffered data
-        this.videoElement.currentTime = 0;
-      }
-    } else {
-      console.log(`❌ SourceBuffer has no buffered ranges`);
-      
-      // Check if video element has different buffered ranges
-      if (this.videoElement.buffered.length > 0) {
-        console.log(`🔍 Video element has ${this.videoElement.buffered.length} buffered range(s) while SourceBuffer has none!`);
-        for (let i = 0; i < this.videoElement.buffered.length; i++) {
-          const start = this.videoElement.buffered.start(i);
-          const end = this.videoElement.buffered.end(i);
-          console.log(`  Video Range ${i}: ${start.toFixed(2)}s - ${end.toFixed(2)}s`);
-        }
-      }
-    }
-    
-    // Manage buffer size to prevent memory issues
-    if (this.sourceBuffer.buffered.length > 0) {
-      const currentTime = this.videoElement.currentTime;
-      const bufferedStart = this.sourceBuffer.buffered.start(0);
-      
-      // Remove old buffered data if we have too much
-      if (currentTime - bufferedStart > this.maxBufferTime) {
-        const removeEnd = currentTime - this.minBufferTime;
-        if (removeEnd > bufferedStart) {
-          try {
-            this.sourceBuffer.remove(bufferedStart, removeEnd);
-          } catch (e) {
-            console.warn('⚠️ Could not remove old buffer data:', e);
-          }
-        }
-      }
+      console.log('📊 Buffer ranges:', ranges);
     }
   }
   
-  /**
-   * Handle seek operations
-   */
-  handleSeek() {
-    if (!this.videoElement) return;
+  handleSourceBufferError(error) {
+    console.error('🔄 Handling SourceBuffer error:', error);
     
+    // Try to recover
+    if (this.mediaSource && this.mediaSource.readyState === 'open') {
+      try {
+        this.mediaSource.endOfStream();
+      } catch (e) {
+        console.warn('⚠️ Could not end stream:', e);
+      }
+    }
+    
+    // Emit error for UI handling
+    this.emit('error', new Error('Streaming error occurred'));
+  }
+  
+  handleSeek() {
     const seekTime = this.videoElement.currentTime;
     console.log(`⏩ Seeking to ${seekTime.toFixed(2)}s`);
     
-    // Calculate which chunk we need for this time
+    // Calculate which chunk we need
     const duration = this.videoElement.duration || 0;
     if (duration > 0) {
       const seekChunk = Math.floor((seekTime / duration) * this.totalChunks);
       
-      // Ensure we have chunks around the seek position
-      const chunksNeeded = Math.min(3, this.totalChunks - seekChunk);
-      for (let i = 0; i < chunksNeeded; i++) {
-        if (seekChunk + i < this.totalChunks) {
-          this.loadChunk(seekChunk + i);
-        }
+      // Load chunks around seek position
+      for (let i = Math.max(0, seekChunk - 1); i <= Math.min(seekChunk + 1, this.totalChunks - 1); i++) {
+        const start = i * this.chunkSize;
+        const end = Math.min(start + this.chunkSize, this.file.size);
+        
+        this.readFileChunk(start, end).then(chunk => {
+          return this.safeAppendToSourceBuffer(chunk, `seek-chunk-${i}`);
+        }).catch(error => {
+          console.warn(`⚠️ Failed to load seek chunk ${i}:`, error);
+        });
       }
     }
   }
   
-  /**
-   * Monitor buffer health
-   */
   monitorBufferHealth() {
     if (!this.videoElement) return;
     
     const currentTime = this.videoElement.currentTime;
     const bufferedAhead = this.getBufferedTimeAhead(currentTime);
     
-    // Calculate buffer health percentage
     this.stats.bufferHealth = Math.min(100, (bufferedAhead / this.bufferTimeAhead) * 100);
     
     this.emit('buffer-health', {
@@ -678,35 +710,21 @@ export class StreamingManager {
     });
   }
   
-  /**
-   * Get buffered time ahead of current playback position
-   */
   getBufferedTimeAhead(currentTime) {
-    if (!this.videoElement.buffered.length) {
-      console.log('🔍 No buffered ranges available');
-      return 0;
-    }
+    if (!this.videoElement.buffered.length) return 0;
     
-    console.log(`🔍 Buffered ranges: ${this.videoElement.buffered.length}, current time: ${currentTime}`);
     for (let i = 0; i < this.videoElement.buffered.length; i++) {
       const start = this.videoElement.buffered.start(i);
       const end = this.videoElement.buffered.end(i);
-      console.log(`  Range ${i}: ${start.toFixed(2)}s - ${end.toFixed(2)}s`);
       
       if (currentTime >= start && currentTime <= end) {
-        const ahead = end - currentTime;
-        console.log(`✅ Found matching range, ${ahead.toFixed(2)}s ahead`);
-        return ahead;
+        return end - currentTime;
       }
     }
     
-    console.log('❌ Current time not in any buffered range');
     return 0;
   }
   
-  /**
-   * Get buffered percentage
-   */
   getBufferedPercent() {
     if (!this.videoElement.buffered.length || !this.videoElement.duration) return 0;
     
@@ -718,9 +736,6 @@ export class StreamingManager {
     return (bufferedTime / this.videoElement.duration) * 100;
   }
   
-  /**
-   * Update buffered ranges for monitoring
-   */
   updateBufferedRanges() {
     this.bufferedRanges = [];
     if (!this.videoElement.buffered) return;
@@ -733,9 +748,6 @@ export class StreamingManager {
     }
   }
   
-  /**
-   * Play video
-   */
   async play() {
     if (!this.videoElement) return;
     
@@ -749,9 +761,6 @@ export class StreamingManager {
     }
   }
   
-  /**
-   * Pause video
-   */
   pause() {
     if (!this.videoElement) return;
     
@@ -760,30 +769,19 @@ export class StreamingManager {
     console.log('⏸️ Playback paused');
   }
   
-  /**
-   * Seek to specific time
-   */
   seek(time) {
     if (!this.videoElement) return;
     
-    // Clamp time to valid range
     const clampedTime = Math.max(0, Math.min(this.videoElement.duration || 0, time));
     this.videoElement.currentTime = clampedTime;
     console.log(`⏩ Seeking to ${clampedTime.toFixed(2)}s`);
   }
   
-  /**
-   * Set playback volume
-   */
   setVolume(volume) {
     if (!this.videoElement) return;
-    
     this.videoElement.volume = Math.max(0, Math.min(1, volume));
   }
   
-  /**
-   * Get streaming statistics
-   */
   getStats() {
     return {
       ...this.stats,
@@ -796,9 +794,6 @@ export class StreamingManager {
     };
   }
   
-  /**
-   * Stop streaming and cleanup
-   */
   stop() {
     this.isStreaming = false;
     this.isPaused = false;
@@ -821,6 +816,14 @@ export class StreamingManager {
     this.currentChunk = 0;
     this.sourceBuffer = null;
     this.mediaSource = null;
+    
+    // Reset metadata tracking
+    this.moovFound = false;
+    this.moovChunkIndex = -1;
+    this.moovAtomInfo = null;
+    this.metadataLoadAttempts = 0;
+    this.currentMimeType = null;
+    this.isReconstructing = false;
     
     console.log('⏹️ Streaming stopped and cleaned up');
   }
