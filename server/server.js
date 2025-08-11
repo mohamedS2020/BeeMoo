@@ -112,8 +112,9 @@ process.on('SIGTERM', () => {
 
 const PORT = process.env.PORT || 3001;
 
-server.listen(PORT, () => {
-  console.log(`BeeMoo Server running on port ${PORT}`);
+const HOST = '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log(`BeeMoo Server running on http://${HOST}:${PORT}`);
 });
 
 module.exports = { app, server, io };
