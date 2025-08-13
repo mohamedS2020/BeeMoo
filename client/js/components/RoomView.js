@@ -80,9 +80,22 @@ export class RoomView {
     // Initialize PeerManager with a local stream provider
     this.peerManager = new PeerManager(this.socketClient, async () => {
       try {
-        return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        console.log(`🎙️ Requesting microphone access for ${this.isHost ? 'HOST' : 'PARTICIPANT'}`);
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }, 
+          video: false 
+        });
+        console.log('✅ Microphone access granted:', {
+          tracks: stream.getAudioTracks().length,
+          trackEnabled: stream.getAudioTracks()[0]?.enabled
+        });
+        return stream;
       } catch (e) {
-        console.warn('Microphone not available, using silent stream');
+        console.warn('⚠️ Microphone not available, using silent stream:', e.message);
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         const dest = ctx.createMediaStreamDestination();
         return dest.stream; // silent stream
@@ -530,25 +543,56 @@ export class RoomView {
   async startVoice() {
     this.voiceActive = true;
     const selfId = this.socketClient.socket?.id;
+    
+    // Ensure local audio stream is ready before establishing connections
+    await this.peerManager.ensureLocalStream();
+    
+    console.log(`🎙️ Starting voice chat as ${this.isHost ? 'HOST' : 'PARTICIPANT'}`);
+    
+    // Both host and participants should initiate calls to ensure bidirectional connections
     for (const [peerId] of this.participants.entries()) {
       if (!peerId || peerId === selfId) continue;
-      try { await this.peerManager.callPeer(peerId); } catch {}
+      try { 
+        console.log(`🔄 Calling peer ${peerId}`);
+        await this.peerManager.callPeer(peerId); 
+      } catch (error) {
+        console.error(`❌ Failed to call peer ${peerId}:`, error);
+      }
     }
+    
+    console.log(`✅ Voice chat started with ${this.participants.size - 1} peers`);
   }
 
   stopVoice() {
     this.voiceActive = false;
     if (this.peerManager) {
       this.peerManager.destroy();
-      // Recreate
+      // Recreate with the same stream provider
       this.peerManager = new PeerManager(this.socketClient, async () => {
-        try { return await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); }
-        catch {
+        try { 
+          console.log(`🎙️ Recreating microphone stream for ${this.isHost ? 'HOST' : 'PARTICIPANT'}`);
+          const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }, 
+            video: false 
+          });
+          console.log('✅ Microphone stream recreated');
+          return stream;
+        }
+        catch (error) {
+          console.warn('⚠️ Microphone not available during recreation:', error.message);
           const ctx = new (window.AudioContext || window.webkitAudioContext)();
           const dest = ctx.createMediaStreamDestination();
           return dest.stream;
         }
       });
+      
+      // Set host status
+      this.peerManager.setHost(this.isHost);
+      
       this.peerManager.onRemoteTrack = (peerId, stream) => {
         // Respect the unified host media policy even after re-init
         const hostPeerId = this.getHostPeerId();

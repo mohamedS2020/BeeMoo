@@ -85,12 +85,33 @@ export class PeerManager {
 
     // Monitor connection quality for adaptive streaming
     pc.oniceconnectionstatechange = () => {
+      console.log(`🔌 ICE connection state for peer ${peerId}: ${pc.iceConnectionState}`);
       this.updateConnectionQuality(peerId, pc);
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`🔗 Connection state for peer ${peerId}: ${pc.connectionState}`);
+      if (pc.connectionState === 'connected') {
+        console.log(`✅ Peer ${peerId} successfully connected`);
+      } else if (pc.connectionState === 'failed') {
+        console.error(`❌ Connection to peer ${peerId} failed`);
+      }
     };
 
     // Attach local audio tracks
     const local = await this._getOrCreateLocalStream();
-    local.getTracks().forEach(t => pc.addTrack(t, local));
+    if (local && local.getAudioTracks().length > 0) {
+      local.getTracks().forEach(track => {
+        console.log(`🎙️ Adding ${track.kind} track to peer ${peerId}:`, {
+          trackId: track.id,
+          enabled: track.enabled,
+          readyState: track.readyState
+        });
+        pc.addTrack(track, local);
+      });
+    } else {
+      console.warn(`⚠️ No local audio tracks available for peer ${peerId}`);
+    }
 
     // Attach video stream if host
     if (this.isHost && this.currentVideoStream) {
@@ -105,24 +126,41 @@ export class PeerManager {
   }
 
   async callPeer(peerId) {
+    console.log(`📞 Initiating call to peer ${peerId}`);
     const pc = await this.ensurePeer(peerId);
+    
+    // Ensure we have local tracks before creating offer
+    const localStream = await this._getOrCreateLocalStream();
+    if (!localStream || localStream.getAudioTracks().length === 0) {
+      console.error(`❌ No local audio tracks available for call to ${peerId}`);
+      return;
+    }
+    
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     this.signaling.sendOffer(offer, peerId);
+    console.log(`📞 Sent offer to peer ${peerId}`);
   }
 
   async handleOffer(fromPeerId, sdp) {
+    console.log(`📞 Received offer from peer ${fromPeerId}`);
     const pc = await this.ensurePeer(fromPeerId);
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     this.signaling.sendAnswer(answer, fromPeerId);
+    console.log(`📞 Sent answer to peer ${fromPeerId}`);
   }
 
   async handleAnswer(fromPeerId, sdp) {
+    console.log(`📞 Received answer from peer ${fromPeerId}`);
     const pc = this.peerIdToPc.get(fromPeerId);
-    if (!pc) return;
+    if (!pc) {
+      console.warn(`⚠️ No peer connection found for ${fromPeerId}`);
+      return;
+    }
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    console.log(`✅ Connection established with peer ${fromPeerId}`);
   }
 
   closePeer(peerId) {
@@ -363,9 +401,30 @@ export class PeerManager {
   }
 
   async _getOrCreateLocalStream() {
-    if (this.currentLocalStream) return this.currentLocalStream;
-    this.currentLocalStream = await this.localStreamProvider();
-    return this.currentLocalStream;
+    if (this.currentLocalStream) {
+      // Check if stream is still active
+      const activeTracks = this.currentLocalStream.getTracks().filter(t => t.readyState === 'live');
+      if (activeTracks.length > 0) {
+        return this.currentLocalStream;
+      }
+    }
+    
+    console.log('🎙️ Creating new local audio stream...');
+    try {
+      this.currentLocalStream = await this.localStreamProvider();
+      console.log('✅ Local audio stream created:', {
+        tracks: this.currentLocalStream.getTracks().length,
+        audio: this.currentLocalStream.getAudioTracks().length
+      });
+      return this.currentLocalStream;
+    } catch (error) {
+      console.error('❌ Failed to create local stream:', error);
+      throw error;
+    }
+  }
+
+  async ensureLocalStream() {
+    return await this._getOrCreateLocalStream();
   }
 
   destroy() {
