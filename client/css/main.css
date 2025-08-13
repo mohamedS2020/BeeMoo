@@ -1134,8 +1134,8 @@ header p {
 .room-header {
   background: linear-gradient(135deg, rgba(255, 215, 0, 0.15), rgba(255, 215, 0, 0.05));
   border-bottom: 2px solid rgba(255, 215, 0, 0.3);
-  padding: 1.5rem;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  padding: 1rem 1.5rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
 }
 
 .room-header-content {
@@ -1154,13 +1154,13 @@ header p {
 }
 
 .room-title {
-  margin: 0 0 0.5rem 0;
-  font-size: 2rem;
+  margin: 0 0 0.25rem 0;
+  font-size: 1.5rem;
   font-weight: 700;
   color: #ffffff;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   flex-wrap: wrap;
 }
 
@@ -1304,8 +1304,14 @@ header p {
   padding: 1.5rem;
   backdrop-filter: blur(10px);
   height: fit-content;
-  max-height: calc(100vh - 200px);
+  max-height: calc(100vh - 180px);
   overflow-y: auto;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  transition: border-color 0.3s ease;
+}
+
+.participants-panel:hover {
+  border-color: rgba(255, 215, 0, 0.2);
 }
 
 .participants-header {
@@ -1336,14 +1342,20 @@ header p {
   gap: 0.75rem;
 }
 
-/* Movie Stage (unchanged) */
+/* Movie Stage */
 .room-stage {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
   padding: 1.5rem;
-  min-height: 500px;
+  min-height: 450px;
   backdrop-filter: blur(10px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  transition: border-color 0.3s ease;
+}
+
+.room-stage:hover {
+  border-color: rgba(255, 215, 0, 0.15);
 }
 
 .stage-container {
@@ -1360,8 +1372,14 @@ header p {
   padding: 1.5rem;
   backdrop-filter: blur(10px);
   height: fit-content;
-  max-height: calc(100vh - 200px);
+  max-height: calc(100vh - 180px);
   overflow-y: auto;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  transition: border-color 0.3s ease;
+}
+
+.audio-panel:hover {
+  border-color: rgba(255, 215, 0, 0.2);
 }
 
 .audio-header {
@@ -1435,6 +1453,8 @@ header p {
   padding: 0.5rem;
   border-radius: 8px;
   font-size: 0.9rem;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .control-select:focus {
@@ -1456,6 +1476,8 @@ header p {
   gap: 0.5rem;
   transition: all 0.3s ease;
   width: 100%;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+  cursor: pointer;
 }
 
 .btn-mic[data-muted="true"] {
@@ -1491,6 +1513,8 @@ header p {
   gap: 0.75rem;
   cursor: pointer;
   position: relative;
+  padding: 0.25rem 0;
+  min-height: 44px; /* Improved touch target */
 }
 
 .feature-toggle input[type="checkbox"] {
@@ -1506,6 +1530,7 @@ header p {
   border-radius: 12px;
   position: relative;
   transition: all 0.3s ease;
+  flex-shrink: 0;
 }
 
 .toggle-slider::before {
@@ -1542,47 +1567,52 @@ header p {
   }
 }
 
-@media (max-width: 1000px) {
+@media (max-width: 900px) {
+  .room-layout {
+    grid-template-columns: 200px 1fr 200px;
+    gap: 0.75rem;
+  }
+  
+  .participants-panel,
+  .audio-panel {
+    padding: 1rem;
+  }
+}
+
+@media (max-width: 768px) {
   .room-layout {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr auto;
+    gap: 1rem;
   }
   
   .participants-panel,
   .audio-panel {
     max-height: none;
+    padding: 1rem;
+  }
+  
+  .room-header {
+    padding: 0.75rem 1rem;
   }
   
   .room-header-content {
     flex-direction: column;
     align-items: flex-start;
-    gap: 1rem;
+    gap: 0.75rem;
   }
   
   .room-details {
     flex-wrap: wrap;
-    gap: 1rem;
-  }
-}
-
-@media (max-width: 768px) {
-  .room-header {
-    padding: 1rem;
+    gap: 0.75rem;
+    width: 100%;
   }
   
   .room-title {
-    font-size: 1.5rem;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
+    font-size: 1.25rem;
   }
   
-  .room-details {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.75rem;
-  }
-  
+  /* Better mobile layout for voice controls */
   .voice-controls {
     flex-direction: column;
     width: 100%;
@@ -1592,18 +1622,79 @@ header p {
   .btn-voice {
     width: 100%;
     justify-content: center;
+    padding: 0.625rem 1rem;
+  }
+  
+  /* Audio panel improvements */
+  .audio-features {
+    gap: 0.5rem;
+  }
+  
+  .feature-toggle {
+    min-height: 48px; /* Larger touch targets on mobile */
+  }
+  
+  .toggle-label {
+    font-size: 0.85rem;
+  }
+}
+
+/* Small mobile devices */
+@media (max-width: 480px) {
+  .room-header {
+    padding: 0.5rem 0.75rem;
+  }
+  
+  .room-title {
+    font-size: 1.125rem;
   }
   
   .room-layout {
     padding: 0.5rem;
-    gap: 0.5rem;
+    gap: 0.75rem;
   }
   
   .participants-panel,
   .audio-panel {
-    padding: 1rem;
+    padding: 0.75rem;
+  }
+  
+  .room-code-container {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+  
+  .participant-count {
+    font-size: 0.85rem;
+  }
+  
+  /* Improved participant list for small screens */
+  .participant {
+    padding: 0.5rem;
+  }
+  
+  .participant-avatar {
+    width: 24px;
+    height: 24px;
+    font-size: 0.75rem;
+  }
+  
+  .participant-name {
+    font-size: 0.85rem;
+  }
+  
+  .audio-controls-group {
+    gap: 0.75rem;
+  }
+  
+  .btn-mic {
+    padding: 0.625rem;
+    font-size: 0.9rem;
   }
 }
+
+
 
 /* Participants panel */
 .participants-header {
@@ -1634,10 +1725,16 @@ header p {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 8px;
-  background: rgba(255,255,255,0.02);
-  border: 1px solid rgba(255,255,255,0.04);
+  padding: 0.75rem;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  transition: all 0.2s ease;
+}
+
+.participant:hover {
+  background: rgba(255,255,255,0.05);
+  border-color: rgba(255, 215, 0, 0.2);
 }
 .participant.empty {
   justify-content: center;
@@ -1650,15 +1747,17 @@ header p {
   gap: 0.75rem;
 }
 .participant-avatar {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: rgba(255,215,0,0.15);
-  border: 1px solid rgba(255,215,0,0.35);
+  background: linear-gradient(135deg, rgba(255,215,0,0.2), rgba(255,215,0,0.1));
+  border: 1px solid rgba(255,215,0,0.4);
   color: #ffd700;
   font-weight: 700;
+  font-size: 0.9rem;
+  box-shadow: 0 2px 8px rgba(255, 215, 0, 0.1);
 }
 .participant-name {
   color: #ffffff;
