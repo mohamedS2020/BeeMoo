@@ -16,6 +16,7 @@ export class VideoPlayer {
     this.isInitialized = false;
     this.isHost = false;
     this.currentFile = null;
+    this.hasTriedDirectLoad = false;
     this.isPlaying = false;
     this.isMuted = false;
     this.volume = 1.0;
@@ -78,14 +79,20 @@ export class VideoPlayer {
     this.streamingManager.on('error', (error) => {
       console.error('❌ Streaming error:', error);
       
-      let errorMessage = 'Streaming error: ' + error.message;
+      let errorMessage = 'Streaming error: ' + (error?.message || 'Unknown error');
       
-      // Provide more specific error messages for common issues
-      if (error.message && error.message.includes('MediaSource')) {
-        errorMessage = 'Video file format error: This video file may not be compatible with browser streaming. Try a different MP4 file or convert to a web-optimized format.';
-      } else if (error.message && error.message.includes('SourceBuffer')) {
-        errorMessage = 'Video streaming failed: There was a problem loading the video data. Please try again or use a smaller file.';
-      } else if (error.message && error.message.includes('Format error')) {
+      // More specific error messages
+      if (error?.message?.includes('MediaSource') || error?.message?.includes('SourceBuffer')) {
+        errorMessage = 'Video streaming failed. The file will be loaded directly instead.';
+        
+        // Try direct fallback as last resort
+        if (this.currentFile && !this.hasTriedDirectLoad) {
+          this.hasTriedDirectLoad = true;
+          console.log('🔄 Attempting direct video load as last resort...');
+          this.videoElement.src = URL.createObjectURL(this.currentFile);
+          return; // Don't show error yet, let direct load attempt work
+        }
+      } else if (error?.message?.includes('Format error')) {
         errorMessage = 'Video format error: This video format is not supported. Please use an MP4 file with H.264 video and AAC audio.';
       }
       
@@ -1708,6 +1715,11 @@ export class VideoPlayer {
     
     // Stop participant timer
     this.stopParticipantTimer();
+    
+    // Clean up blob URL if using direct loading
+    if (this.videoElement && this.videoElement.src && this.videoElement.src.startsWith('blob:')) {
+      URL.revokeObjectURL(this.videoElement.src);
+    }
     
     // Remove event listeners
     document.removeEventListener('keydown', this.handleKeyPress);

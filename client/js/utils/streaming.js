@@ -1,6 +1,3 @@
-// BeeMoo - Advanced Video Streaming Utility
-// Fixed version with better error handling and large file support
-
 export class StreamingManager {
   constructor() {
     this.mediaSource = null;
@@ -86,14 +83,19 @@ export class StreamingManager {
   }
   
   async initializeStreaming(file, videoElement, options = {}) {
-    // For files over 100MB, use fallback mode immediately
-    if (file.size > 100 * 1024 * 1024) {
-      console.log('📦 Large file detected, using fallback streaming mode');
+    // FIXED: Use fallback mode for files under 200MB instead of MSE
+    // This fixes the SourceBuffer errors that occur with smaller files
+    if (file.size < 200 * 1024 * 1024) {
+      console.log('🔧 Small/medium file detected, using reliable fallback streaming mode');
       return this.initializeFallbackStreaming(file, videoElement, options);
     }
     
+    // Only use MSE for very large files where chunking is actually necessary
+    console.log('📦 Large file detected, attempting MSE streaming mode');
+    
     if (!this.capabilities.mseSupported) {
-      throw new Error('Media Source Extensions not supported in this browser');
+      console.log('❌ MSE not supported, falling back to blob streaming');
+      return this.initializeFallbackStreaming(file, videoElement, options);
     }
     
     this.file = file;
@@ -102,20 +104,26 @@ export class StreamingManager {
     this.bufferTimeAhead = options.bufferTimeAhead || this.bufferTimeAhead;
     
     // Detect and validate MIME type
-    const mimeType = await this.detectMimeType(file);
-    this.currentMimeType = mimeType;
+    let mimeType;
+    try {
+      mimeType = await this.detectMimeType(file);
+      this.currentMimeType = mimeType;
+    } catch (error) {
+      console.warn('⚠️ MIME type detection failed, using fallback mode:', error);
+      return this.initializeFallbackStreaming(file, videoElement, options);
+    }
     
     if (!this.capabilities.supportedMimeTypes.includes(mimeType)) {
-      console.warn(`⚠️ Unsupported format ${mimeType}, trying fallback mode`);
+      console.warn(`⚠️ Unsupported format ${mimeType}, using fallback mode`);
       return this.initializeFallbackStreaming(file, videoElement, options);
     }
     
     // Calculate chunks
     this.totalChunks = Math.ceil(file.size / this.chunkSize);
-    console.log(`🎬 Initializing streaming: ${this.totalChunks} chunks of ${this.formatBytes(this.chunkSize)}`);
+    console.log(`🎬 Initializing MSE streaming: ${this.totalChunks} chunks of ${this.formatBytes(this.chunkSize)}`);
     
     try {
-      // Create and setup MediaSource
+      // Create and setup MediaSource with better error handling
       this.mediaSource = new MediaSource();
       this.setupMediaSourceEvents();
       
@@ -129,7 +137,15 @@ export class StreamingManager {
       this.setupVideoEvents();
       
       return new Promise((resolve, reject) => {
+        // Add timeout for MSE initialization
+        const timeout = setTimeout(() => {
+          console.warn('⏰ MSE initialization timeout, switching to fallback');
+          this.cleanup();
+          this.initializeFallbackStreaming(file, videoElement, options).then(resolve).catch(reject);
+        }, 10000); // 10 second timeout
+        
         this.mediaSource.addEventListener('sourceopen', async () => {
+          clearTimeout(timeout);
           try {
             await this.initializeSourceBuffer(mimeType);
             await this.startOptimizedStreaming();
@@ -142,15 +158,15 @@ export class StreamingManager {
             });
           } catch (error) {
             console.error('❌ MSE initialization failed, switching to fallback:', error);
-            // Switch to fallback mode
             this.cleanup();
             const result = await this.initializeFallbackStreaming(file, videoElement, options);
             resolve(result);
           }
         }, { once: true });
         
-        this.mediaSource.addEventListener('error', async () => {
-          console.error('❌ MediaSource error, switching to fallback mode');
+        this.mediaSource.addEventListener('error', async (e) => {
+          clearTimeout(timeout);
+          console.error('❌ MediaSource error, switching to fallback mode:', e);
           this.cleanup();
           const result = await this.initializeFallbackStreaming(file, videoElement, options);
           resolve(result);
@@ -179,11 +195,17 @@ export class StreamingManager {
     // Set the video source
     this.videoElement.src = blobUrl;
     
-    // Wait for metadata to load
+    // Preload metadata for better performance
+    this.videoElement.preload = 'metadata';
+    
+    // Wait for metadata to load with better error handling
     return new Promise((resolve) => {
       const onLoadedMetadata = () => {
         this.videoElement.removeEventListener('loadedmetadata', onLoadedMetadata);
+        this.videoElement.removeEventListener('error', onError);
+        
         console.log('✅ Fallback streaming ready');
+        console.log(`📊 Video metadata loaded - Duration: ${this.videoElement.duration}s`);
         
         this.isStreaming = true;
         this.emit('ready');
@@ -198,41 +220,53 @@ export class StreamingManager {
       };
       
       const onError = (e) => {
+        this.videoElement.removeEventListener('loadedmetadata', onLoadedMetadata);
         this.videoElement.removeEventListener('error', onError);
-        console.error('❌ Fallback streaming also failed:', e);
         
-        // Last resort: let the browser handle it directly
+        console.error('❌ Fallback streaming failed:', e);
+        
+        // Even if there's an error, try to resolve with basic info
+        // Sometimes videos work despite initial errors
         resolve({
-          duration: 0,
+          duration: this.videoElement.duration || 0,
           totalChunks: 1,
           chunkSize: file.size,
           mimeType: file.type || 'video/mp4',
           mode: 'direct',
-          error: 'Video format not supported'
+          error: 'Video format may have compatibility issues'
         });
       };
       
       this.videoElement.addEventListener('loadedmetadata', onLoadedMetadata);
       this.videoElement.addEventListener('error', onError);
       
-      // Timeout fallback
+      // Timeout fallback - reduced from 5s to 3s for better UX
       setTimeout(() => {
         if (!this.isStreaming) {
           console.warn('⚠️ Metadata loading timeout, continuing anyway');
+          this.videoElement.removeEventListener('loadedmetadata', onLoadedMetadata);
+          this.videoElement.removeEventListener('error', onError);
           onLoadedMetadata();
         }
-      }, 5000);
+      }, 3000);
     });
   }
+
+  // ... (rest of the methods remain the same)
   
   async detectMimeType(file) {
-    // Check if it's an unsupported format
-    const unsupportedFormats = ['video/avi', 'video/wmv', 'video/flv'];
+    // More robust MIME type detection
+    const unsupportedFormats = ['video/avi', 'video/wmv', 'video/flv', 'video/mkv'];
     if (file.type && unsupportedFormats.includes(file.type)) {
-      throw new Error('Unsupported video format');
+      throw new Error(`Unsupported video format: ${file.type}`);
     }
     
-    // Start with file.type if available
+    // For fallback mode, we're more permissive with formats
+    if (this.useFallbackMode || file.size < 200 * 1024 * 1024) {
+      return file.type || 'video/mp4';
+    }
+    
+    // Start with file.type if available and supported
     if (file.type && this.capabilities.supportedMimeTypes.includes(file.type)) {
       return file.type;
     }
@@ -242,7 +276,6 @@ export class StreamingManager {
     
     // MP4 detection
     if (this.isMP4Header(header)) {
-      // Try different codec combinations
       const codecCombos = [
         'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
         'video/mp4; codecs="avc1.4D401E,mp4a.40.2"',
