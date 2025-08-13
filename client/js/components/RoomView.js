@@ -1304,8 +1304,14 @@ export class RoomView {
         break;
 
       case 'sync':
-        // For sync, only update playback state - DO NOT reinitialize video player
-        console.log('🔄 Host triggered sync - updating playback state only');
+        // Host should NOT process their own sync events
+        if (this.isHost) {
+          console.log('🔄 Host ignoring own sync event (no self-sync needed)');
+          return;
+        }
+        
+        // For participants only: update playback state - DO NOT reinitialize video player
+        console.log('🔄 Participant processing sync from host');
         
         if (this.videoPlayer && movieState) {
           // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
@@ -1378,7 +1384,14 @@ export class RoomView {
    */
   handleHostPlay(movieState) {
     if (!this.videoPlayer) return;
-    console.log('▶️ Host started playback');
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('▶️ Host ignoring own play event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('▶️ Participant syncing with host play');
     
     // Ensure movie title is included for sync display
     const syncState = {
@@ -1391,7 +1404,14 @@ export class RoomView {
 
   handleHostPause(movieState) {
     if (!this.videoPlayer) return;
-    console.log('⏸️ Host paused playback');
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏸️ Host ignoring own pause event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏸️ Participant syncing with host pause');
     
     // Ensure movie title is included for sync display
     const syncState = {
@@ -1404,7 +1424,14 @@ export class RoomView {
 
   handleHostSeek(movieState) {
     if (!this.videoPlayer) return;
-    console.log('⏩ Host seeked to:', movieState.currentTime);
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏩ Host ignoring own seek event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏩ Participant syncing with host seek to:', movieState.currentTime);
     
     // Ensure movie title is included for sync display
     const syncState = {
