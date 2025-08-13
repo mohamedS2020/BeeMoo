@@ -1304,18 +1304,23 @@ export class RoomView {
         break;
 
       case 'sync':
-        // Treat 'sync' as a full state update: show video player, set movie info, and sync playback position
-        await this.handleHostStartedStreaming(movieState);
-        if (movieState && typeof movieState.currentTime === 'number') {
-          // Seek to the correct time and play/pause as needed
-          if (this.videoPlayer && this.videoPlayer.videoElement) {
-            this.videoPlayer.videoElement.currentTime = movieState.currentTime;
-            if (movieState.isPlaying) {
-              this.videoPlayer.videoElement.play();
-            } else {
-              this.videoPlayer.videoElement.pause();
-            }
+        // For sync, only update playback state - DO NOT reinitialize video player
+        console.log('🔄 Host triggered sync - updating playback state only');
+        
+        if (this.videoPlayer && movieState) {
+          // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
+          this.videoPlayer.syncWithHost('seek', movieState);
+          
+          // Then apply play/pause state
+          if (movieState.isPlaying) {
+            this.videoPlayer.syncWithHost('play', movieState);
+          } else {
+            this.videoPlayer.syncWithHost('pause', movieState);
           }
+        } else if (!this.videoPlayer) {
+          // Only if video player doesn't exist (new participant), then initialize
+          console.log('🎬 New participant - initializing video player for sync');
+          await this.handleHostStartedStreaming(movieState);
         }
         break;
 

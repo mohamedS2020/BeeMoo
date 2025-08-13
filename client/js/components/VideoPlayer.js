@@ -361,59 +361,93 @@ export class VideoPlayer {
     // Update participant movie state with latest data
     this.participantMovieState = { ...this.participantMovieState, ...movieState };
     
-    // For participants, we'll do virtual sync (no actual video playback)
+    // Check if we have a real WebRTC video stream or virtual mode
+    const hasWebRTCStream = this.videoElement && 
+                           this.videoElement.srcObject && 
+                           this.videoElement.getAttribute('data-webrtc') === 'true';
+    
+    console.log(`🎯 Sync mode: ${hasWebRTCStream ? 'WebRTC Real Video' : 'Virtual Mode'}`);
+    
     try {
-      // Update internal timing state based on host action
-      switch (action) {
-        case 'play':
-          this.isPlaying = true;
-          this.currentTime = movieState.currentTime || 0;
-          
-          // Start virtual playback timer for participants
-          this.startParticipantTimer();
-          
-          // If we have virtual video setup, update its currentTime
-          if (this.videoElement && this.duration > 0) {
-            Object.defineProperty(this.videoElement, 'currentTime', {
-              value: this.currentTime,
-              writable: true,
-              configurable: true
-            });
-          }
-          break;
-          
-        case 'pause':
-          this.isPlaying = false;
-          this.currentTime = movieState.currentTime || 0;
-          
-          // Stop virtual playback timer
-          this.stopParticipantTimer();
-          
-          if (this.videoElement && this.duration > 0) {
-            Object.defineProperty(this.videoElement, 'currentTime', {
-              value: this.currentTime,
-              writable: true,
-              configurable: true
-            });
-          }
-          break;
-          
-        case 'seek':
-          this.currentTime = movieState.currentTime || 0;
-          
-          // Update timer if playing
-          if (this.isPlaying) {
+      if (hasWebRTCStream) {
+        // Real WebRTC video - sync the actual video element
+        console.log(`🎥 Syncing real WebRTC video for action: ${action}`);
+        
+        switch (action) {
+          case 'play':
+            this.isPlaying = true;
+            this.currentTime = movieState.currentTime || 0;
+            // Don't seek during play to avoid interrupting stream
+            await this.videoElement.play();
+            break;
+            
+          case 'pause':
+            this.isPlaying = false;
+            this.currentTime = movieState.currentTime || 0;
+            this.videoElement.pause();
+            break;
+            
+          case 'seek':
+            this.currentTime = movieState.currentTime || 0;
+            // For WebRTC streams, we can't actually seek, so just update internal state
+            // The video will naturally sync via the stream
+            console.log('🎥 WebRTC seek - updating internal time only');
+            break;
+        }
+      } else {
+        // Virtual mode - use timer-based sync
+        console.log(`⏱️ Syncing virtual mode for action: ${action}`);
+        
+        switch (action) {
+          case 'play':
+            this.isPlaying = true;
+            this.currentTime = movieState.currentTime || 0;
+            
+            // Start virtual playback timer for participants
             this.startParticipantTimer();
-          }
-          
-          if (this.videoElement && this.duration > 0) {
-            Object.defineProperty(this.videoElement, 'currentTime', {
-              value: this.currentTime,
-              writable: true,
-              configurable: true
-            });
-          }
-          break;
+            
+            // If we have virtual video setup, update its currentTime
+            if (this.videoElement && this.duration > 0) {
+              Object.defineProperty(this.videoElement, 'currentTime', {
+                value: this.currentTime,
+                writable: true,
+                configurable: true
+              });
+            }
+            break;
+            
+          case 'pause':
+            this.isPlaying = false;
+            this.currentTime = movieState.currentTime || 0;
+            
+            // Stop virtual playback timer
+            this.stopParticipantTimer();
+            
+            if (this.videoElement && this.duration > 0) {
+              Object.defineProperty(this.videoElement, 'currentTime', {
+                value: this.currentTime,
+                writable: true,
+                configurable: true
+              });
+            }
+            break;
+            
+          case 'seek':
+            this.currentTime = movieState.currentTime || 0;
+            
+            // Update timer if playing
+            if (this.isPlaying) {
+              this.startParticipantTimer();
+            }
+            
+            if (this.videoElement && this.duration > 0) {
+              Object.defineProperty(this.videoElement, 'currentTime', {
+                value: this.currentTime,
+                writable: true,
+                configurable: true
+              });
+            }
+        }
       }
       
       // Update UI to reflect the sync
