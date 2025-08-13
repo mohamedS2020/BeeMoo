@@ -2805,19 +2805,31 @@ header p {
   }
   
   .video-controls {
-    padding: 16px 12px 12px;
+    padding: 12px 8px 8px;
+  }
+  
+  .controls-row {
+    flex-wrap: wrap;
+    gap: 8px;
   }
   
   .controls-left {
-    gap: 8px;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
   }
   
   .controls-right {
-    gap: 8px;
+    gap: 6px;
+    flex-shrink: 0;
   }
   
   .volume-slider {
     width: 50px;
+  }
+  
+  .volume-container {
+    display: none; /* Hide volume on mobile to save space */
   }
   
   .participant {
@@ -2869,12 +2881,25 @@ header p {
     min-height: 250px;
   }
   
-  .controls-left {
+  .video-controls {
+    padding: 8px 4px 6px;
+  }
+  
+  .controls-row {
+    flex-direction: column;
     gap: 6px;
   }
   
+  .controls-left {
+    gap: 4px;
+    justify-content: space-between;
+    order: 2;
+  }
+  
   .controls-right {
-    gap: 6px;
+    gap: 4px;
+    justify-content: center;
+    order: 1;
   }
   
   .volume-container {
@@ -2887,6 +2912,29 @@ header p {
   
   .time-display {
     font-size: 0.75rem;
+    min-width: 70px;
+  }
+  
+  .control-btn {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 4px;
+  }
+  
+  .play-pause-btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+  
+  /* Stack host controls vertically on very small screens */
+  .host-controls {
+    flex-direction: column;
+    gap: 4px;
+  }
+  
+  .sync-btn {
+    padding: 4px 8px;
+    min-width: auto;
   }
 }
 

@@ -370,13 +370,15 @@ export class VideoPlayer {
     
     try {
       if (hasWebRTCStream) {
-        // Real WebRTC video - sync the actual video element
+        // Real WebRTC video - sync the actual video element AND maintain UI timer
         console.log(`🎥 Syncing real WebRTC video for action: ${action}`);
         
         switch (action) {
           case 'play':
             this.isPlaying = true;
             this.currentTime = movieState.currentTime || 0;
+            // Start participant timer for UI display (WebRTC handles video, timer handles UI)
+            this.startParticipantTimer();
             // Don't seek during play to avoid interrupting stream
             await this.videoElement.play();
             break;
@@ -384,6 +386,8 @@ export class VideoPlayer {
           case 'pause':
             this.isPlaying = false;
             this.currentTime = movieState.currentTime || 0;
+            // Stop timer when paused
+            this.stopParticipantTimer();
             this.videoElement.pause();
             break;
             
@@ -391,7 +395,11 @@ export class VideoPlayer {
             this.currentTime = movieState.currentTime || 0;
             // For WebRTC streams, we can't actually seek, so just update internal state
             // The video will naturally sync via the stream
-            console.log('🎥 WebRTC seek - updating internal time only');
+            console.log('🎥 WebRTC seek - updating internal time and restarting timer if playing');
+            // Restart timer if currently playing
+            if (this.isPlaying) {
+              this.startParticipantTimer();
+            }
             break;
         }
       } else {

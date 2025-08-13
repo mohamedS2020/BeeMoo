@@ -1048,8 +1048,8 @@ export class RoomView {
       // WebRTC streams don't have duration, so we keep using the original movie duration
       const originalDuration = this.videoPlayer.duration;
       
-      // Stop participant virtual timer since we have real video
-      this.videoPlayer.stopParticipantTimer();
+      // Keep participant timer running for UI display (WebRTC video + timer-based UI)
+      console.log('🕐 Keeping participant timer for WebRTC UI display');
       
       // Restore the original duration after stream assignment
       if (originalDuration && originalDuration > 0) {
