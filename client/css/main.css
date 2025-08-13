@@ -15,25 +15,6 @@ body {
   line-height: 1.6;
 }
 
-/* Accessibility Utilities */
-.skip-link {
-  position: absolute;
-  top: -40px;
-  left: 6px;
-  background: #6366f1;
-  color: #1a1a2e;
-  padding: 8px;
-  text-decoration: none;
-  border-radius: 4px;
-  font-weight: bold;
-  z-index: 9999;
-  transition: top 0.3s;
-}
-
-.skip-link:focus {
-  top: 6px;
-}
-
 .sr-only {
   position: absolute;
   width: 1px;
