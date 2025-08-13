@@ -196,20 +196,6 @@ export class RoomView {
     // Bind movie synchronization events
     this.bindMovieEvents();
 
-    // Voice toggle
-    const voiceBtn = this.root.querySelector('#toggle-voice');
-    if (voiceBtn) {
-      voiceBtn.addEventListener('click', async () => {
-        if (this.voiceActive) {
-          this.stopVoice();
-          voiceBtn.textContent = 'Start Voice';
-        } else {
-          await this.startVoice();
-          voiceBtn.textContent = 'Stop Voice';
-        }
-      });
-    }
-
     // Populate devices and bind audio controls
     this.populateMicDevices();
 
@@ -218,23 +204,54 @@ export class RoomView {
     // This ensures participants joining mid-stream are synced and see/hear the host right away
     this.startVoice();
 
-    // Optionally, update the voice button to only allow stopping voice (no manual start)
-    const voiceBtn2 = this.root.querySelector('#toggle-voice');
-    if (voiceBtn2) {
-      voiceBtn2.textContent = 'Stop Voice';
-      voiceBtn2.disabled = false;
-      voiceBtn2.onclick = async () => {
-        if (this.voiceActive) {
-          this.stopVoice();
-          voiceBtn2.textContent = 'Voice Stopped';
-          voiceBtn2.disabled = true;
-        }
-      };
-    }
+    // Audio controls
     const micToggle = this.root.querySelector('#mic-toggle');
     const applyBtn = this.root.querySelector('#apply-audio');
     micToggle?.addEventListener('click', () => this.toggleMic(micToggle));
     applyBtn?.addEventListener('click', () => this.applyAudioSettings());
+    
+    // Copy room code functionality
+    const copyBtn = this.root.querySelector('.copy-btn');
+    const roomCode = this.root.querySelector('.room-code');
+    if (copyBtn && roomCode) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(roomCode.textContent);
+          copyBtn.textContent = '✅';
+          setTimeout(() => {
+            copyBtn.textContent = '📋';
+          }, 2000);
+        } catch (err) {
+          console.warn('Failed to copy to clipboard:', err);
+          // Fallback for older browsers
+          const textArea = document.createElement('textarea');
+          textArea.value = roomCode.textContent;
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+          copyBtn.textContent = '✅';
+          setTimeout(() => {
+            copyBtn.textContent = '📋';
+          }, 2000);
+        }
+      });
+      
+      roomCode.addEventListener('click', () => {
+        copyBtn.click();
+      });
+    }
+    
+    // Audio panel toggle
+    const audioPanelToggle = this.root.querySelector('#audio-panel-toggle');
+    const audioContent = this.root.querySelector('#audio-content');
+    if (audioPanelToggle && audioContent) {
+      audioPanelToggle.addEventListener('click', () => {
+        const isVisible = audioContent.style.display !== 'none';
+        audioContent.style.display = isVisible ? 'none' : 'block';
+        audioPanelToggle.textContent = isVisible ? '⚙️' : '❌';
+      });
+    }
   }
 
   initializeMovieFileSelector() {
@@ -532,11 +549,19 @@ export class RoomView {
     const local = this.peerManager?.currentLocalStream;
     const track = local?.getAudioTracks()[0];
     if (!track) return;
+    
     const nextEnabled = !track.enabled;
     track.enabled = nextEnabled;
-    buttonEl.textContent = nextEnabled ? 'Mute Mic' : 'Unmute Mic';
-    // Notify server about mic status for participant list update
+    
+    // Update button appearance and text
     const muted = !nextEnabled;
+    buttonEl.setAttribute('data-muted', muted);
+    const micText = buttonEl.querySelector('.mic-text');
+    if (micText) {
+      micText.textContent = nextEnabled ? 'Mute Mic' : 'Unmute Mic';
+    }
+    
+    // Notify server about mic status for participant list update
     this.socketClient.emit('mic-toggle', { muted });
   }
 
@@ -1430,38 +1455,110 @@ export class RoomView {
   render(initialData) {
     const roomCode = initialData?.roomCode || '######';
     const title = initialData?.room?.title || 'BeeMoo Room';
+    const participantCount = initialData?.participants?.length || 0;
 
     return `
-      <section class="room-shell" aria-label="Room">
+      <section class="room-container" aria-label="Room">
         <header class="room-header">
-          <h2 class="room-title">${this.escapeHtml(title)}</h2>
-          <div class="room-meta">
-            <span class="room-code-inline" title="Room Code">${this.escapeHtml(roomCode)}</span>
-            <button id="request-mic" class="btn btn-secondary btn-small" style="margin-left:8px">Enable Mic</button>
-            <button id="toggle-voice" class="btn btn-primary btn-small" style="margin-left:8px">Start Voice</button>
+          <div class="room-header-content">
+            <div class="room-info">
+              <h1 class="room-title">
+                <span class="room-title-text">${this.escapeHtml(title)}</span>
+                ${this.isHost ? '<span class="host-badge">HOST</span>' : ''}
+              </h1>
+              <div class="room-details">
+                <div class="room-code-container">
+                  <span class="room-code-label">Room Code:</span>
+                  <span class="room-code" title="Click to copy">${this.escapeHtml(roomCode)}</span>
+                  <button class="copy-btn" title="Copy room code">📋</button>
+                </div>
+                <div class="participant-count">
+                  <span class="participant-icon">👥</span>
+                  <span class="participant-text">${participantCount} participant${participantCount !== 1 ? 's' : ''}</span>
+                </div>
+              </div>
+            </div>
+            
+            <div class="room-controls">
+              <div class="voice-controls">
+                <button id="request-mic" class="btn btn-secondary btn-sm" title="Test microphone access">
+                  <span class="mic-icon">🔧</span>
+                  Setup Mic
+                </button>
+              </div>
+            </div>
           </div>
         </header>
-        <div class="room-content">
-          <aside class="room-sidebar" aria-label="Participants">
-            <div id="participants-container"></div>
+
+        <div class="room-layout">
+          <aside class="participants-panel" aria-label="Participants">
+            <div class="participants-header">
+              <h3 class="participants-title">
+                <span class="participants-icon">👥</span>
+                Participants
+              </h3>
+            </div>
+            <div id="participants-container" class="participants-content"></div>
           </aside>
-          <main class="room-main" aria-label="Stage">
-            ${this.renderMovieStage()}
-            <div class="audio-controls" style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
-              <button id="mic-toggle" class="btn btn-secondary btn-small">Mute Mic</button>
-              <select id="mic-device" class="form-input" style="max-width:260px;"></select>
-              <label style="display:flex; align-items:center; gap:6px; font-size:0.9rem;">
-                <input type="checkbox" id="aec" checked /> Echo Cancellation
-              </label>
-              <label style="display:flex; align-items:center; gap:6px; font-size:0.9rem;">
-                <input type="checkbox" id="ns" checked /> Noise Suppression
-              </label>
-              <label style="display:flex; align-items:center; gap:6px; font-size:0.9rem;">
-                <input type="checkbox" id="agc" checked /> Auto Gain
-              </label>
-              <button id="apply-audio" class="btn btn-primary btn-small">Apply</button>
+
+          <main class="room-stage" aria-label="Movie Stage">
+            <div class="stage-container">
+              ${this.renderMovieStage()}
             </div>
           </main>
+
+          <aside class="audio-panel" aria-label="Audio Controls">
+            <div class="audio-header">
+              <h3 class="audio-title">
+                <span class="audio-icon">🎵</span>
+                Audio Settings
+              </h3>
+              <button class="audio-toggle" id="audio-panel-toggle" title="Toggle audio settings">⚙️</button>
+            </div>
+            
+            <div class="audio-content" id="audio-content">
+              <div class="audio-controls-group">
+                <div class="control-row">
+                  <button id="mic-toggle" class="btn btn-mic" data-muted="false">
+                    <span class="mic-icon">🎤</span>
+                    <span class="mic-text">Mute Mic</span>
+                  </button>
+                </div>
+                
+                <div class="control-row">
+                  <label class="control-label">Microphone Device:</label>
+                  <select id="mic-device" class="control-select"></select>
+                </div>
+                
+                <div class="audio-features">
+                  <label class="feature-toggle">
+                    <input type="checkbox" id="aec" checked />
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Echo Cancellation</span>
+                  </label>
+                  
+                  <label class="feature-toggle">
+                    <input type="checkbox" id="ns" checked />
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Noise Suppression</span>
+                  </label>
+                  
+                  <label class="feature-toggle">
+                    <input type="checkbox" id="agc" checked />
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Auto Gain Control</span>
+                  </label>
+                </div>
+                
+                <div class="control-row">
+                  <button id="apply-audio" class="btn btn-primary btn-block">
+                    <span class="apply-icon">✅</span>
+                    Apply Settings
+                  </button>
+                </div>
+              </div>
+            </div>
+          </aside>
         </div>
       </section>
     `;
