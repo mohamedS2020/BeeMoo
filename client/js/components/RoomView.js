@@ -207,8 +207,10 @@ export class RoomView {
     // Audio controls
     const micToggle = this.root.querySelector('#mic-toggle');
     const applyBtn = this.root.querySelector('#apply-audio');
+    const leaveBtn = this.root.querySelector('#leave-room');
     micToggle?.addEventListener('click', () => this.toggleMic(micToggle));
     applyBtn?.addEventListener('click', () => this.applyAudioSettings());
+    leaveBtn?.addEventListener('click', () => this.handleLeaveRoom());
     
     // Copy room code functionality
     const copyBtn = this.root.querySelector('.copy-btn');
@@ -1474,6 +1476,249 @@ export class RoomView {
   }
   
   /**
+   * Handle leave room request with confirmation
+   */
+  async handleLeaveRoom() {
+    // Show confirmation dialog
+    const confirmed = await this.showLeaveConfirmation();
+    if (!confirmed) return;
+
+    console.log('🚪 User initiated hard leave...');
+
+    try {
+      // Show loading state on leave button
+      const leaveBtn = this.root.querySelector('#leave-room');
+      if (leaveBtn) {
+        leaveBtn.disabled = true;
+        leaveBtn.innerHTML = '<span class="leave-icon">⏳</span>Leaving...';
+      }
+
+      // Emit leave room event to server
+      this.socketClient.emit('leave-room');
+      
+      // Listen for server confirmation
+      this.socketClient.on('room-left', (data) => {
+        console.log('✅ Server confirmed room left:', data);
+        this.performHardLeave();
+      });
+
+      // Also handle errors
+      this.socketClient.on('leave-room-error', (error) => {
+        console.error('❌ Leave room error:', error);
+        // Still perform hard leave even if server error
+        this.performHardLeave();
+      });
+
+      // Fallback timeout - perform hard leave anyway after 3 seconds
+      setTimeout(() => {
+        console.log('⏰ Leave timeout - performing hard leave anyway');
+        this.performHardLeave();
+      }, 3000);
+
+    } catch (error) {
+      console.error('❌ Error during leave process:', error);
+      // Still perform hard leave on error
+      this.performHardLeave();
+    }
+  }
+
+  /**
+   * Show leave confirmation dialog
+   */
+  async showLeaveConfirmation() {
+    return new Promise((resolve) => {
+      // Create confirmation modal
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay leave-confirmation-modal';
+      modal.innerHTML = `
+        <div class="modal-content" role="dialog" aria-labelledby="leave-title" aria-modal="true">
+          <div class="modal-header">
+            <h3 id="leave-title">🚪 Leave Room</h3>
+          </div>
+          <div class="modal-body">
+            <p><strong>Are you sure you want to leave?</strong></p>
+            <ul style="margin: 10px 0; padding-left: 20px; color: #666;">
+              <li>You'll be disconnected from the movie party</li>
+              <li>Your session will be completely cleared</li>
+              <li>You'll need to rejoin manually if you want to come back</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-leave">Cancel</button>
+            <button class="btn btn-danger" id="confirm-leave">
+              <span>🚪</span> Leave Room
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Handle confirmation
+      const confirmBtn = modal.querySelector('#confirm-leave');
+      const cancelBtn = modal.querySelector('#cancel-leave');
+
+      const cleanup = () => {
+        modal.remove();
+      };
+
+      confirmBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // ESC key and overlay click to cancel
+      const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+          cleanup();
+          resolve(false);
+          document.removeEventListener('keydown', handleEscape);
+        }
+      };
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleEscape);
+
+      // Focus the cancel button by default
+      setTimeout(() => cancelBtn.focus(), 100);
+    });
+  }
+
+  /**
+   * Perform complete hard leave - clear everything and go to landing
+   */
+  performHardLeave() {
+    console.log('🧹 Performing hard leave - clearing all data...');
+
+    // Stop all ongoing activities
+    this.cleanup();
+
+    // Clear all local storage related to BeeMoo
+    try {
+      localStorage.removeItem('beemoo-room-session');
+      localStorage.removeItem('beemoo-user-preferences');
+      localStorage.removeItem('beemoo-audio-settings');
+      // Clear any other BeeMoo related storage
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          localStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared local storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some local storage:', error);
+    }
+
+    // Clear session storage too
+    try {
+      sessionStorage.removeItem('beemoo-room-session');
+      const keys = Object.keys(sessionStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared session storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some session storage:', error);
+    }
+
+    // Disconnect from socket completely
+    if (this.socketClient) {
+      this.socketClient.disconnect();
+      console.log('✅ Disconnected from socket');
+    }
+
+    // Navigate back to landing page
+    this.navigateToLanding();
+  }
+
+  /**
+   * Navigate back to landing page with fresh state
+   */
+  navigateToLanding() {
+    console.log('🏠 Navigating to landing page...');
+
+    // Emit leave event for parent app
+    this.emit('leave-room', { 
+      reason: 'user-initiated',
+      hardLeave: true 
+    });
+
+    // Fallback: manually reload page if parent doesn't handle the event
+    setTimeout(() => {
+      console.log('🔄 Fallback: Reloading page to ensure clean state');
+      window.location.href = window.location.origin;
+    }, 1000);
+  }
+
+  /**
+   * Cleanup all resources and connections
+   */
+  cleanup() {
+    console.log('🧹 Cleaning up RoomView resources...');
+
+    // Stop video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+
+    // Stop peer manager and WebRTC connections
+    if (this.peerManager) {
+      this.peerManager.destroy();
+      this.peerManager = null;
+    }
+
+    // Stop voice chat
+    if (this.voiceActive) {
+      this.stopVoice();
+    }
+
+    // Clean up participant list
+    if (this.participantList) {
+      this.participantList.destroy();
+    }
+
+    // Clear participants map
+    this.participants.clear();
+
+    // Remove all socket event listeners related to room
+    if (this.socketClient) {
+      this.socketClient.off('participant-joined');
+      this.socketClient.off('participant-left');
+      this.socketClient.off('participant-disconnected');
+      this.socketClient.off('host-disconnected');
+      this.socketClient.off('room-deleted');
+      this.socketClient.off('movie-state-updated');
+      this.socketClient.off('movie-control');
+      this.socketClient.off('mic-status-updated');
+      this.socketClient.off('room-left');
+      this.socketClient.off('leave-room-error');
+    }
+
+    // Stop any ongoing timers or intervals
+    if (this.videoSyncInterval) {
+      clearInterval(this.videoSyncInterval);
+      this.videoSyncInterval = null;
+    }
+
+    console.log('✅ RoomView cleanup complete');
+  }
+
+  /**
    * Event emitter functionality
    */
   emit(event, data) {
@@ -1516,6 +1761,12 @@ export class RoomView {
                 <button id="request-mic" class="btn btn-secondary btn-sm" title="Test microphone access">
                   <span class="mic-icon">🔧</span>
                   Setup Mic
+                </button>
+              </div>
+              <div class="room-actions">
+                <button id="leave-room" class="btn btn-danger btn-sm" title="Leave room permanently">
+                  <span class="leave-icon">🚪</span>
+                  Leave Room
                 </button>
               </div>
             </div>

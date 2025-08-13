@@ -329,6 +329,13 @@ export class App {
       const initialParticipants = Array.isArray(roomData.participants) && roomData.participants.length > 0
         ? roomData.participants
         : (roomData.user ? [roomData.user] : []);
+      
+      // Listen for leave room event from RoomView
+      container.addEventListener('roomview:leave-room', (e) => {
+        console.log('🚪 Leave room event received:', e.detail);
+        this.handleLeaveRoom(e.detail);
+      });
+      
       this.roomView.mount(container, {
         roomCode: roomData.roomCode,
         room: roomData.room,
@@ -336,6 +343,32 @@ export class App {
         participants: initialParticipants,
       });
     }
+  }
+
+  /**
+   * Handle room leave and navigate back to landing
+   */
+  handleLeaveRoom(leaveData) {
+    console.log('🏠 Handling leave room - returning to landing page');
+    
+    // Clear current room data
+    this.currentRoom = null;
+    this.currentView = 'landing';
+    
+    // Clear any persisted session
+    this.clearRoomSession();
+    
+    // Reconnect socket for fresh state (but don't auto-join anything)
+    this.socketClient.disconnect();
+    setTimeout(() => {
+      this.socketClient.connect();
+    }, 500);
+    
+    // Re-render landing page
+    this.render();
+    this.setupEventListeners();
+    
+    console.log('✅ Successfully returned to landing page');
   }
 
   // Utility method for future use
