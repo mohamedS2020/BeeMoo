@@ -68,7 +68,13 @@ export class PeerManager {
         
         // Handle voice chat audio tracks (separate from video audio)
         if (track.kind === 'audio' && track.label !== 'video-audio' && this.onRemoteTrack) {
-          console.log(`🎙️ Voice chat audio track from peer ${peerId}`);
+          console.log(`🎙️ Voice chat audio track from peer ${peerId}:`, {
+            trackId: track.id,
+            enabled: track.enabled,
+            muted: track.muted,
+            readyState: track.readyState,
+            settings: track.getSettings ? track.getSettings() : 'N/A'
+          });
           this.onRemoteTrack(peerId, stream);
         }
         

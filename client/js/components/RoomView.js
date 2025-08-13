@@ -123,28 +123,38 @@ export class RoomView {
         const hostPeerId = this.getHostPeerId();
         const isFromHost = !!hostPeerId && peerId === hostPeerId;
 
-        // If I am a participant and this audio is from the host, do NOT create a separate <audio> element.
-        // We will merge host audio into the VideoPlayer's video element stream.
-        if (!isLocalHost && isFromHost) {
-          if (stream && stream.getAudioTracks && stream.getAudioTracks().length > 0) {
-            // Store/replace host mic stream (avoid duplicates)
-            this.upsertHostAudioStream(stream);
-            // Attempt to combine with the host video stream (if available)
-            this.combineAndAttachHostStreamsIfReady();
-          }
-          return;
-        }
+        console.log(`🎙️ Handling remote track from ${peerId}:`, {
+          isLocalHost,
+          hostPeerId,
+          isFromHost,
+          streamId: stream.id,
+          audioTracks: stream.getAudioTracks().length
+        });
 
-        // For all other participants' voice, keep existing behavior (separate <audio> per peer)
+        // SIMPLIFIED: Always create audio element for voice chat - no special routing
         let el = this.root.querySelector(`audio[data-peer="${peerId}"]`);
         if (!el) {
           el = document.createElement('audio');
           el.dataset.peer = peerId;
           el.autoplay = true;
           el.playsInline = true;
+          el.volume = 1.0;
+          el.muted = false;
           this.root.appendChild(el);
+          console.log(`🔊 Created audio element for peer ${peerId}`);
         }
+        
         el.srcObject = stream;
+        
+        // Try to play explicitly to overcome autoplay restrictions
+        el.play().then(() => {
+          console.log(`✅ Audio playing for peer ${peerId}`);
+        }).catch(error => {
+          console.warn(`⚠️ Audio autoplay blocked for peer ${peerId}:`, error);
+          // Show user notification to click to enable audio
+          this.showAudioPlaybackNotification(peerId);
+        });
+
       } catch (e) {
         console.error('Failed handling remote audio track:', e);
       }
@@ -1053,6 +1063,39 @@ export class RoomView {
       if (p && p.isHost) return socketId;
     }
     return null;
+  }
+
+  showAudioPlaybackNotification(peerId) {
+    // Show a temporary notification that user needs to interact to hear audio
+    const notification = document.createElement('div');
+    notification.className = 'audio-notification';
+    notification.innerHTML = `
+      <div style="background: #ff6b35; color: white; padding: 10px; border-radius: 5px; margin: 5px; cursor: pointer;">
+        🔊 Click to enable audio from peer
+      </div>
+    `;
+    
+    notification.onclick = async () => {
+      const audioEl = this.root.querySelector(`audio[data-peer="${peerId}"]`);
+      if (audioEl) {
+        try {
+          await audioEl.play();
+          console.log(`✅ Audio manually started for peer ${peerId}`);
+          notification.remove();
+        } catch (error) {
+          console.error(`❌ Failed to start audio for peer ${peerId}:`, error);
+        }
+      }
+    };
+    
+    this.root.appendChild(notification);
+    
+    // Auto-remove after 10 seconds
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.remove();
+      }
+    }, 10000);
   }
 
   /**
