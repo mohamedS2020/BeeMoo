@@ -53,6 +53,17 @@ export class RoomView {
         if (p && p.socketId) this.participants.set(p.socketId, p);
       }
     }
+    
+    // CRITICAL FIX: Ensure host adds themselves to participants map for voice chat
+    if (this.isHost && initialData?.user && this.socketClient?.socket?.id) {
+      const hostUser = {
+        socketId: this.socketClient.socket.id,
+        username: initialData.user.username,
+        isHost: true
+      };
+      this.participants.set(hostUser.socketId, hostUser);
+      console.log('✅ Host added to participants map for voice chat:', hostUser);
+    }
 
     // Initialize movie stage based on current state
     this.updateMovieStage();
@@ -548,10 +559,14 @@ export class RoomView {
     await this.peerManager.ensureLocalStream();
     
     console.log(`🎙️ Starting voice chat as ${this.isHost ? 'HOST' : 'PARTICIPANT'}`);
+    console.log(`🔍 Self ID: ${selfId}, Participants:`, Array.from(this.participants.entries()));
     
     // Both host and participants should initiate calls to ensure bidirectional connections
     for (const [peerId] of this.participants.entries()) {
-      if (!peerId || peerId === selfId) continue;
+      if (!peerId || peerId === selfId) {
+        console.log(`⏭️ Skipping self or invalid peer: ${peerId}`);
+        continue;
+      }
       try { 
         console.log(`🔄 Calling peer ${peerId}`);
         await this.peerManager.callPeer(peerId); 
@@ -623,12 +638,17 @@ export class RoomView {
   bindRoomParticipantEvents() {
     if (this.boundHandlers) return;
     this._onJoined = ({ participant, participants }) => {
+      console.log('👥 Participant joined event:', { participant, participants });
       if (participants) {
         for (const p of participants) this.participants.set(p.socketId, p);
       } else if (participant) {
         this.participants.set(participant.socketId, participant);
+        console.log(`✅ Added participant ${participant.socketId} to map. Total participants: ${this.participants.size}`);
         if (this.voiceActive) {
-          this.peerManager.callPeer(participant.socketId).catch(() => {});
+          console.log(`🔄 Calling new participant ${participant.socketId}`);
+          this.peerManager.callPeer(participant.socketId).catch((error) => {
+            console.error(`❌ Failed to call new participant ${participant.socketId}:`, error);
+          });
           // --- Ensure late joiners get the real video stream if host is streaming ---
           if (this.isHost && this.peerManager.currentVideoStream) {
             // Renegotiate to add video stream for the new participant

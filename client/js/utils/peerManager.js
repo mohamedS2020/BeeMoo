@@ -38,8 +38,11 @@ export class PeerManager {
 
     const pc = new RTCPeerConnection({
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
-      ]
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ],
+      iceCandidatePoolSize: 10
     });
 
     pc.onicecandidate = (evt) => {
@@ -94,7 +97,14 @@ export class PeerManager {
       if (pc.connectionState === 'connected') {
         console.log(`✅ Peer ${peerId} successfully connected`);
       } else if (pc.connectionState === 'failed') {
-        console.error(`❌ Connection to peer ${peerId} failed`);
+        console.error(`❌ Connection to peer ${peerId} failed, attempting restart...`);
+        // Attempt to restart the connection
+        setTimeout(() => {
+          if (pc.connectionState === 'failed') {
+            console.log(`🔄 Restarting connection to peer ${peerId}`);
+            this.restartConnection(peerId);
+          }
+        }, 2000);
       }
     };
 
@@ -420,6 +430,20 @@ export class PeerManager {
     } catch (error) {
       console.error('❌ Failed to create local stream:', error);
       throw error;
+    }
+  }
+
+  async restartConnection(peerId) {
+    try {
+      console.log(`🔄 Restarting connection to peer ${peerId}`);
+      // Close existing connection
+      this.closePeer(peerId);
+      // Wait a moment before reconnecting
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Recreate connection
+      await this.callPeer(peerId);
+    } catch (error) {
+      console.error(`❌ Failed to restart connection to peer ${peerId}:`, error);
     }
   }
 
