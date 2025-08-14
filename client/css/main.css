@@ -1295,7 +1295,7 @@ header p {
   background: rgba(0, 255, 159, 0.1);
 }
 
-.participant-count {
+.viewer-count {
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -1303,7 +1303,7 @@ header p {
   font-size: 0.85rem;
 }
 
-.participant-icon {
+.viewer-icon {
   font-size: 1.1rem;
 }
 
@@ -1363,8 +1363,8 @@ header p {
   border-radius: 20px 20px 0 0;
 }
 
-/* Participants Panel */
-.participants-panel {
+/* Audience Panel */
+.audience-panel {
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(139, 92, 246, 0.04));
   border: 1px solid rgba(139, 92, 246, 0.12);
   border-radius: 20px;
@@ -1376,7 +1376,7 @@ header p {
   box-shadow: 0 8px 32px rgba(139, 92, 246, 0.15);
 }
 
-.participants-header {
+.audience-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1385,7 +1385,7 @@ header p {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.participants-title {
+.audience-title {
   margin: 0;
   font-size: 1.1rem;
   color: #ffffff;
@@ -1395,11 +1395,11 @@ header p {
   font-weight: 600;
 }
 
-.participants-icon {
+.audience-icon {
   font-size: 1.2rem;
 }
 
-.participants-content {
+.audience-content {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1621,7 +1621,7 @@ header p {
     grid-template-rows: auto 1fr auto;
   }
   
-  .participants-panel,
+  .audience-panel,
   .audio-panel {
     max-height: none;
   }
@@ -1672,29 +1672,29 @@ header p {
     gap: 0.5rem;
   }
   
-  .participants-panel,
+  .audience-panel,
   .audio-panel {
     padding: 1rem;
   }
 }
 
-/* Participants panel */
-.participants-header {
+/* Audience panel */
+.audience-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.75rem;
 }
-.participants-title {
+.audience-title {
   margin: 0;
   font-size: 1rem;
   color: #ffffff;
 }
-.participants-count {
+.audience-count {
   color: #cccccc;
   font-size: 0.9rem;
 }
-.participants-list {
+.audience-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1702,7 +1702,7 @@ header p {
   flex-direction: column;
   gap: 0.5rem;
 }
-.participant {
+.viewer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1716,25 +1716,25 @@ header p {
   box-shadow: 0 2px 8px rgba(139, 92, 246, 0.1);
 }
 
-.participant:hover {
+.viewer:hover {
   background: rgba(139, 92, 246, 0.1);
   border-color: rgba(0, 255, 159, 0.2);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(139, 92, 246, 0.15);
 }
-.participant.empty {
+.viewer.empty {
   justify-content: center;
   color: #aaaaaa;
   font-style: italic;
 }
-.participant-left {
+.viewer-left {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   flex: 1;
   min-width: 0;
 }
-.participant-avatar {
+.viewer-avatar {
   width: 28px;
   height: 28px;
   border-radius: 50%;
@@ -1746,7 +1746,7 @@ header p {
   font-weight: 700;
   box-shadow: 0 2px 8px rgba(0, 255, 159, 0.2);
 }
-.participant-name {
+.viewer-name {
   color: #ffffff;
   font-weight: 500;
   overflow: hidden;
@@ -1755,7 +1755,7 @@ header p {
   font-size: 0.9rem;
 }
 
-.participant-right {
+.viewer-right {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1771,17 +1771,17 @@ header p {
   padding: 2px 6px;
   box-shadow: 0 2px 4px rgba(0, 255, 159, 0.3);
 }
-.participant-mic.live { 
+.viewer-mic.live { 
   color: #00ff9f; 
   filter: drop-shadow(0 0 4px rgba(0, 255, 159, 0.5));
 }
-.participant-mic.muted { 
+.viewer-mic.muted { 
   color: #d946ef; 
   filter: drop-shadow(0 0 4px rgba(217, 70, 239, 0.5));
 }
 
-/* Participant Volume Range Input Styling */
-.participant-volume {
+/* Viewer Volume Range Input Styling */
+.viewer-volume {
   width: 60px;
   height: 4px;
   -webkit-appearance: none;
@@ -1793,7 +1793,7 @@ header p {
   cursor: pointer;
 }
 
-.participant-volume::-webkit-slider-thumb {
+.viewer-volume::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 12px;
@@ -1806,12 +1806,12 @@ header p {
   transition: all 0.2s ease;
 }
 
-.participant-volume::-webkit-slider-thumb:hover {
+.viewer-volume::-webkit-slider-thumb:hover {
   transform: scale(1.2);
   box-shadow: 0 2px 6px rgba(0, 255, 159, 0.4);
 }
 
-.participant-volume::-moz-range-thumb {
+.viewer-volume::-moz-range-thumb {
   width: 12px;
   height: 12px;
   border-radius: 50%;
@@ -1821,7 +1821,7 @@ header p {
   box-shadow: 0 1px 4px rgba(139, 92, 246, 0.3);
 }
 
-.participant-volume::-moz-range-track {
+.viewer-volume::-moz-range-track {
   background: rgba(139, 92, 246, 0.2);
   height: 4px;
   border-radius: 3px;
@@ -2598,7 +2598,7 @@ header p {
   padding: 24px 20px 20px;
 }
 
-/* ===== HOST CONTROLS & PARTICIPANT INDICATORS ===== */
+/* ===== HOST CONTROLS & VIEWER INDICATORS ===== */
 
 /* Host Controls Container */
 .host-controls {
@@ -2632,8 +2632,8 @@ header p {
   line-height: 1;
 }
 
-/* Participant Indicator */
-.participant-indicator {
+/* Viewer Indicator */
+.viewer-indicator {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -2648,11 +2648,11 @@ header p {
   box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
 }
 
-.participant-indicator svg {
+.viewer-indicator svg {
   opacity: 0.8;
 }
 
-.participant-text {
+.viewer-text {
   line-height: 1;
 }
 
@@ -2753,7 +2753,7 @@ header p {
   opacity: 0.9;
 }
 
-/* ===== PARTICIPANT VIDEO PLAYER ENHANCEMENTS ===== */
+/* ===== VIEWER VIDEO PLAYER ENHANCEMENTS ===== */
 
 .movie-details {
   margin: 12px 0;
@@ -2769,7 +2769,7 @@ header p {
   color: rgba(255, 255, 255, 0.9);
 }
 
-.participant-status {
+.viewer-status {
   margin-top: 16px;
   padding: 12px;
   background: rgba(16, 185, 129, 0.1);
@@ -2777,7 +2777,7 @@ header p {
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
-.participant-status p {
+.viewer-status p {
   margin: 6px 0;
   color: #10b981;
   font-weight: 500;
@@ -2906,20 +2906,20 @@ header p {
     display: none; /* Hide volume on mobile to save space */
   }
   
-  .participant {
+  .viewer {
     padding: 0.5rem 0.4rem;
     gap: 0.4rem;
   }
   
-  .participant-name {
+  .viewer-name {
     font-size: 0.85rem;
   }
   
-  .participant-volume {
+  .viewer-volume {
     width: 45px;
   }
   
-  .participant-right {
+  .viewer-right {
     gap: 0.4rem;
   }
   

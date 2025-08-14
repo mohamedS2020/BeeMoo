@@ -24,8 +24,8 @@ describe('ParticipantList', () => {
   });
 
   it('renders empty state initially', () => {
-    expect(container.querySelector('.participants-count').textContent).toBe('0');
-    expect(container.querySelector('.participants-list').textContent).toContain('Waiting for participants');
+    expect(container.querySelector('.audience-count').textContent).toBe('0');
+    expect(container.querySelector('.audience-list').textContent).toContain('No viewers yet');
   });
 
   it('sets participants and renders items', () => {
@@ -34,10 +34,10 @@ describe('ParticipantList', () => {
       { socketId: 'b', username: 'Bob', isHost: false, muted: true },
     ]);
 
-    const items = container.querySelectorAll('.participant');
+    const items = container.querySelectorAll('.viewer');
     expect(items.length).toBe(2);
 
-    const count = container.querySelector('.participants-count').textContent;
+    const count = container.querySelector('.audience-count').textContent;
     expect(count).toBe('2');
 
     expect(container.innerHTML).toContain('Alice');
@@ -48,7 +48,7 @@ describe('ParticipantList', () => {
 
   it('adds or updates participant', () => {
     list.addOrUpdateParticipant({ socketId: 'c', username: 'Charlie', muted: false });
-    expect(container.querySelector('.participants-count').textContent).toBe('1');
+    expect(container.querySelector('.audience-count').textContent).toBe('1');
     expect(container.innerHTML).toContain('Charlie');
 
     // Update mic status
@@ -58,10 +58,10 @@ describe('ParticipantList', () => {
 
   it('removes a participant', () => {
     list.setParticipants([{ socketId: 'x', username: 'Xenia' }]);
-    expect(container.querySelector('.participants-count').textContent).toBe('1');
+    expect(container.querySelector('.audience-count').textContent).toBe('1');
 
     list.removeParticipant({ socketId: 'x' });
-    expect(container.querySelector('.participants-count').textContent).toBe('0');
+    expect(container.querySelector('.audience-count').textContent).toBe('0');
   });
 
   it('binds and unbinds socket events once', () => {
@@ -81,14 +81,14 @@ describe('ParticipantList', () => {
   it('handles participant-joined payload with participants array', () => {
     const handler = mockSocketClient.on.mock.calls.find(c => c[0] === 'participant-joined')[1];
     handler({ participants: [{ socketId: 'a', username: 'Alice' }] });
-    expect(container.querySelector('.participants-count').textContent).toBe('1');
+    expect(container.querySelector('.audience-count').textContent).toBe('1');
   });
 
   it('handles participant-left payload with single participant', () => {
     list.setParticipants([{ socketId: 'a', username: 'Alice' }]);
     const handler = mockSocketClient.on.mock.calls.find(c => c[0] === 'participant-left')[1];
     handler({ participant: { socketId: 'a' } });
-    expect(container.querySelector('.participants-count').textContent).toBe('0');
+    expect(container.querySelector('.audience-count').textContent).toBe('0');
   });
 
   it('escapes HTML in usernames', () => {

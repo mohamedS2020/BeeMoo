@@ -1,5 +1,5 @@
-// BeeMoo - Participant List Component
-// Renders and updates the list of participants with mic status indicators
+// BeeMoo - Audience List Component
+// Renders and updates the list of viewers with mic status indicators
 
 export class ParticipantList {
   constructor(socketClient) {
@@ -33,7 +33,7 @@ export class ParticipantList {
   attach(containerElement) {
     if (!containerElement) return;
     this.container = containerElement;
-    this.container.classList.add('participants-panel');
+    this.container.classList.add('audience-panel');
     this.render();
 
     // Ensure events are bound once
@@ -45,7 +45,7 @@ export class ParticipantList {
     if (this.container) {
       this.container.removeEventListener('input', this._onVolumeInput);
       this.container.innerHTML = '';
-      this.container.classList.remove('participants-panel');
+      this.container.classList.remove('audience-panel');
     }
     this.container = null;
     this.unbindSocketEvents();
@@ -163,9 +163,9 @@ export class ParticipantList {
 
     // Panel header
     const headerHtml = `
-      <div class="participants-header">
-        <h3 class="participants-title">Participants</h3>
-        <span class="participants-count" aria-live="polite">${participants.length}</span>
+      <div class="audience-header">
+        <h3 class="audience-title">Audience</h3>
+        <span class="audience-count" aria-live="polite">${participants.length}</span>
       </div>
     `;
 
@@ -175,8 +175,8 @@ export class ParticipantList {
       .join('');
 
     const listHtml = `
-      <ul class="participants-list" role="list">
-        ${listItemsHtml || '<li class="participant empty">Waiting for participants…</li>'}
+      <ul class="audience-list" role="list">
+        ${listItemsHtml || '<li class="viewer empty">No viewers yet…</li>'}
       </ul>
     `;
 
@@ -192,16 +192,16 @@ export class ParticipantList {
     const ariaName = String(p.username).replace(/[<>]/g, '');
 
     return `
-      <li class="participant" data-socket-id="${p.socketId}">
-        <div class="participant-left">
-          <span class="participant-avatar" aria-hidden="true">${p.username.charAt(0).toUpperCase()}</span>
-          <div class="participant-info">
-            <span class="participant-name">${safeName} ${hostBadge}</span>
+      <li class="viewer" data-socket-id="${p.socketId}">
+        <div class="viewer-left">
+          <span class="viewer-avatar" aria-hidden="true">${p.username.charAt(0).toUpperCase()}</span>
+          <div class="viewer-info">
+            <span class="viewer-name">${safeName} ${hostBadge}</span>
           </div>
         </div>
-        <div class="participant-right">
-          <input type="range" class="participant-volume" data-socket-id="${p.socketId}" min="0" max="100" value="${volume}" aria-label="Volume for ${ariaName}" />
-          <span class="participant-mic ${micClass}" aria-label="${p.muted ? 'Muted' : 'Unmuted'}">${micIcon}</span>
+        <div class="viewer-right">
+          <input type="range" class="viewer-volume" data-socket-id="${p.socketId}" min="0" max="100" value="${volume}" aria-label="Volume for ${ariaName}" />
+          <span class="viewer-mic ${micClass}" aria-label="${p.muted ? 'Muted' : 'Unmuted'}">${micIcon}</span>
         </div>
       </li>
     `;
@@ -218,7 +218,7 @@ export class ParticipantList {
 
   _onVolumeInput(event) {
     const target = event.target;
-    if (!target.classList.contains('participant-volume')) return;
+    if (!target.classList.contains('viewer-volume')) return;
     const socketId = target.getAttribute('data-socket-id');
     const vol = Math.max(0, Math.min(100, parseInt(target.value || '0', 10)));
     this.socketIdToVolume.set(socketId, vol);

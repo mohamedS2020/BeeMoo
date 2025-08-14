@@ -514,7 +514,7 @@ export class VideoPlayer {
   }
 
   /**
-   * Show sync status for participants with enhanced information
+   * Show sync status for viewers with enhanced information
    */
   showParticipantSyncStatus(action, movieState) {
     // Don't show overlay if we have proper video metadata and duration
@@ -1286,15 +1286,15 @@ export class VideoPlayer {
   }
 
   /**
-   * Update sync button tooltip with participant count
+   * Update sync button tooltip with viewer count
    */
   updateSyncButtonTooltip() {
     const syncBtn = this.container.querySelector('#sync-btn');
     if (!syncBtn || !this.isHost) return;
     
-    // This would be called when participant count changes
-    // For now, show generic tooltip - will be enhanced when participant count is available
-    syncBtn.title = 'Sync playback with all participants';
+    // This would be called when viewer count changes
+    // For now, show generic tooltip - will be enhanced when viewer count is available
+    syncBtn.title = 'Sync playback with all viewers';
   }
   
   /**

@@ -1,5 +1,5 @@
 // BeeMoo - Room View
-// Minimal scaffold that hosts the participant list and room header
+// Minimal scaffold that hosts the audience list and room header
 
 import { ParticipantList } from './ParticipantList.js';
 import { WebRTCUtils } from '../utils/webrtc.js';
@@ -44,8 +44,8 @@ export class RoomView {
     
     this.root.innerHTML = this.render(initialData);
 
-    const participantsContainer = this.root.querySelector('#participants-container');
-    this.participantList.attach(participantsContainer);
+    const audienceContainer = this.root.querySelector('#audience-container');
+    this.participantList.attach(audienceContainer);
 
     if (initialData?.participants) {
       this.participantList.setParticipants(initialData.participants);
@@ -353,7 +353,7 @@ export class RoomView {
     switch (this.movieState) {
       case 'none':
       case 'selecting':
-        // Show file selector for hosts, waiting screen for participants
+        // Show file selector for hosts, waiting screen for viewers
         movieStage.innerHTML = this.isHost ? 
           '<div id="movie-file-selector-container"></div>' :
           this.renderWaitingForHost();
@@ -1749,9 +1749,9 @@ export class RoomView {
                   <span class="room-code" title="Click to copy">${this.escapeHtml(roomCode)}</span>
                   <button class="copy-btn" title="Copy room code">📋</button>
                 </div>
-                <div class="participant-count">
-                  <span class="participant-icon">👥</span>
-                  <span class="participant-text">${participantCount} participant${participantCount !== 1 ? 's' : ''}</span>
+                <div class="viewer-count">
+                  <span class="viewer-icon">👥</span>
+                  <span class="viewer-text">${participantCount} viewer${participantCount !== 1 ? 's' : ''}</span>
                 </div>
               </div>
             </div>
@@ -1774,14 +1774,14 @@ export class RoomView {
         </header>
 
         <div class="room-layout">
-          <aside class="participants-panel" aria-label="Participants">
-            <div class="participants-header">
-              <h3 class="participants-title">
-                <span class="participants-icon">👥</span>
-                Participants
+          <aside class="audience-panel" aria-label="Audience">
+            <div class="audience-header">
+              <h3 class="audience-title">
+                <span class="audience-icon">👥</span>
+                Audience
               </h3>
             </div>
-            <div id="participants-container" class="participants-content"></div>
+            <div id="audience-container" class="audience-content"></div>
           </aside>
 
           <main class="room-stage" aria-label="Movie Stage">
