@@ -693,6 +693,8 @@ export class RoomView {
           }
         }
       }
+      // Update viewer count display
+      this.updateViewerCount();
     };
     this._onLeft = ({ participant, participants }) => {
       if (participants) {
@@ -702,6 +704,8 @@ export class RoomView {
         this.participants.delete(participant.socketId);
         if (this.voiceActive) this.peerManager.closePeer(participant.socketId);
       }
+      // Update viewer count display
+      this.updateViewerCount();
     };
     this._onDisconnected = this._onLeft;
     this.socketClient.on('participant-joined', this._onJoined);
@@ -716,6 +720,20 @@ export class RoomView {
     this.socketClient.off('participant-left', this._onLeft);
     this.socketClient.off('participant-disconnected', this._onDisconnected);
     this.boundHandlers = false;
+  }
+
+  /**
+   * Update the viewer count display in the room header
+   */
+  updateViewerCount() {
+    if (!this.root) return;
+    
+    const viewerCountElement = this.root.querySelector('.viewer-text');
+    if (viewerCountElement) {
+      const count = this.participants.size;
+      viewerCountElement.textContent = `${count} viewer${count !== 1 ? 's' : ''}`;
+      console.log(`📊 Updated viewer count display to: ${count}`);
+    }
   }
 
   /**
