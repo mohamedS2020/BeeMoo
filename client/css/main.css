@@ -273,13 +273,15 @@ header p {
   margin: 0 auto;
   padding: 0 20px;
   text-align: center;
+  position: relative;
 }
 
 /* Mobile nav */
 .brand-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
+  position: relative;
 }
 .nav-toggle {
   display: none;
@@ -290,6 +292,10 @@ header p {
   height: 42px;
   place-items: center;
   color: #00ff9f;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 .nav-toggle-bar {
   width: 20px;
@@ -338,6 +344,8 @@ header p {
   font-weight: 700;
   margin: 0;
   text-shadow: 0 2px 10px rgba(0, 255, 159, 0.3), 0 0 30px rgba(0, 255, 159, 0.2);
+  text-align: center;
+  width: 100%;
 }
 
 .tagline {
@@ -345,6 +353,8 @@ header p {
   font-size: 1.1rem;
   margin: 0.5rem 0 0 0;
   font-weight: 300;
+  text-align: center;
+  width: 100%;
 }
 
 /* Landing Page Main Content */
@@ -1178,28 +1188,38 @@ header p {
 .room-header-content {
   max-width: 1400px;
   margin: 0 auto;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
   gap: 1rem;
+  position: relative;
 }
 
 .room-info {
-  flex: 1;
-  min-width: 300px;
+  grid-column: 1;
+  justify-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .room-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 50%;
+  transform: translate(-50%, -50%);
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 2rem;
   font-weight: 700;
   color: #ffffff;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.4rem;
   flex-wrap: wrap;
   line-height: 1.2;
+  white-space: nowrap;
 }
 
 .room-title-text {
@@ -1216,6 +1236,8 @@ header p {
   font-weight: 700;
   letter-spacing: 0.3px;
   box-shadow: 0 1px 4px rgba(0, 255, 159, 0.4);
+  align-self: center;
+  margin-top: 0.5rem;
 }
 
 .room-details {
@@ -1286,6 +1308,8 @@ header p {
 }
 
 .room-controls {
+  grid-column: 3;
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 1rem;
