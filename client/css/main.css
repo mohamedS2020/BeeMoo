@@ -1212,7 +1212,10 @@ header p {
   margin: 0;
   font-size: 2rem;
   font-weight: 700;
-  color: #ffffff;
+  background: linear-gradient(135deg, #00ff9f, #8b5cf6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1220,24 +1223,51 @@ header p {
   flex-wrap: wrap;
   line-height: 1.2;
   white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.room-title:hover {
+  background: linear-gradient(135deg, #00ff9f, #10d9c5);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  transform: translate(-50%, -50%) scale(1.02);
+  filter: drop-shadow(0 2px 8px rgba(0, 255, 159, 0.4));
 }
 
 .room-title-text {
-  color: #8b5cf6;
-  text-shadow: 0 2px 8px rgba(139, 92, 246, 0.3), 0 0 20px rgba(139, 92, 246, 0.2);
+  background: linear-gradient(135deg, #00ff9f, #8b5cf6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: none;
 }
 
 .host-badge {
-  background: linear-gradient(135deg, #00ff9f, #8b5cf6);
-  color: #1a0f3e;
+  background: #00ff9f;
+  color: #1a0f3e !important;
   padding: 0.15rem 0.5rem;
   border-radius: 16px;
   font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.3px;
-  box-shadow: 0 1px 4px rgba(0, 255, 159, 0.4);
+  box-shadow: 0 2px 8px rgba(0, 255, 159, 0.4);
   align-self: center;
   margin-top: 0.5rem;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  -webkit-text-fill-color: #1a0f3e !important;
+  -webkit-background-clip: border-box !important;
+  background-clip: border-box !important;
+}
+
+.host-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 255, 159, 0.5);
+  background: #10d9c5;
+  color: #1a0f3e !important;
+  -webkit-text-fill-color: #1a0f3e !important;
 }
 
 .room-details {
@@ -1255,8 +1285,15 @@ header p {
   background: rgba(139, 92, 246, 0.05);
   padding: 0.3rem 0.6rem;
   border-radius: 16px;
-  border: 1px solid rgba(139, 92, 246, 0.1);
-  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.2);
+  transition: all 0.3s ease;
+}
+
+.room-code-container:hover {
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+  background: rgba(139, 92, 246, 0.08);
 }
 
 .room-code-label {
@@ -1268,16 +1305,23 @@ header p {
 .room-code {
   color: #8b5cf6;
   font-weight: 700;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   letter-spacing: 1px;
   cursor: pointer;
   transition: all 0.2s ease;
   text-shadow: 0 0 10px rgba(139, 92, 246, 0.3);
+  padding: 0.3rem 0.55rem;
+  border: 1px solid #00ff9f;
+  border-radius: 7px;
+  background: rgba(0, 255, 159, 0.05);
 }
 
 .room-code:hover {
   color: #00ff9f;
   text-shadow: 0 0 8px #00ff9f;
+  border-color: #00ff9f;
+  background: rgba(0, 255, 159, 0.1);
+  box-shadow: 0 0 8px rgba(0, 255, 159, 0.3);
 }
 
 .copy-btn {
@@ -1692,19 +1736,30 @@ header p {
     white-space: normal;
     flex-direction: column;
     gap: 0.5rem;
-    background: linear-gradient(135deg, #8b5cf6, #00ff9f);
+    background: linear-gradient(135deg, #00ff9f, #8b5cf6);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
     filter: drop-shadow(0 2px 4px rgba(139, 92, 246, 0.3));
+    cursor: pointer;
+    transition: all 0.3s ease;
   }
   
-  .room-title-text {
-    background: linear-gradient(135deg, #8b5cf6, #00ff9f);
+  .room-title:hover {
+    background: linear-gradient(135deg, #00ff9f, #10d9c5);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
-    text-shadow: none;
+    transform: scale(1.02);
+    filter: drop-shadow(0 4px 8px rgba(0, 255, 159, 0.4));
+  }
+  
+  .room-title-text {
+    background: linear-gradient(135deg, #00ff9f, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: 1.75rem;
   }
   
   .host-badge {
@@ -1714,7 +1769,7 @@ header p {
     padding: 0.25rem 0.75rem;
     border-radius: 20px;
     box-shadow: 0 2px 8px rgba(0, 255, 159, 0.4);
-    background: linear-gradient(135deg, #00ff9f, #8b5cf6) !important;
+    background: #00ff9f !important;
     color: #1a0f3e !important;
     -webkit-background-clip: border-box !important;
     -webkit-text-fill-color: #1a0f3e !important;
@@ -1746,17 +1801,21 @@ header p {
   
   .room-code-container {
     flex: 1;
-    background: rgba(139, 92, 246, 0.1);
+    background: rgba(0, 255, 159, 0.08);
     padding: 0.75rem 1rem;
     border-radius: 12px;
-    border: 1px solid rgba(139, 92, 246, 0.2);
-    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.15);
+    border: 1px solid #00ff9f;
+    box-shadow: 0 2px 8px rgba(0, 255, 159, 0.2);
   }
   
   .room-code {
     font-size: 1rem;
     font-weight: 800;
     letter-spacing: 1.5px;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid #00ff9f;
+    border-radius: 8px;
+    background: rgba(0, 255, 159, 0.05);
   }
   
   .room-code-label {
@@ -1855,6 +1914,25 @@ header p {
   .room-title {
     font-size: 1.5rem;
     margin-bottom: 0.75rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+  
+  .room-title:hover {
+    background: linear-gradient(135deg, #00ff9f, #10d9c5);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    transform: scale(1.02);
+    filter: drop-shadow(0 4px 8px rgba(0, 255, 159, 0.4));
+  }
+  
+  .room-title-text {
+    background: linear-gradient(135deg, #00ff9f, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: 1.5rem;
   }
   
   .room-title-text {
@@ -1864,7 +1942,7 @@ header p {
   .host-badge {
     font-size: 0.7rem;
     padding: 0.2rem 0.6rem;
-    background: linear-gradient(135deg, #00ff9f, #8b5cf6) !important;
+    background: #00ff9f !important;
     color: #1a0f3e !important;
     -webkit-background-clip: border-box !important;
     -webkit-text-fill-color: #1a0f3e !important;
@@ -1885,9 +1963,19 @@ header p {
     padding: 0.75rem;
   }
   
+  .room-code-container {
+    background: rgba(0, 255, 159, 0.08);
+    border: 1px solid #00ff9f;
+    box-shadow: 0 2px 8px rgba(0, 255, 159, 0.2);
+  }
+  
   .room-code {
     font-size: 0.95rem;
     letter-spacing: 1.2px;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid #00ff9f;
+    border-radius: 6px;
+    background: rgba(0, 255, 159, 0.05);
   }
   
   .room-code-label {
@@ -2008,9 +2096,19 @@ header p {
   font-size: 0.7rem;
   color: #1a0f3e;
   background: #00ff9f;
-  border-radius: 6px;
-  padding: 2px 6px;
-  box-shadow: 0 2px 4px rgba(0, 255, 159, 0.3);
+  border-radius: 12px;
+  padding: 0.2rem 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  box-shadow: 0 2px 8px rgba(0, 255, 159, 0.4);
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.badge-host:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 255, 159, 0.5);
+  background: #10d9c5;
 }
 .viewer-mic.live { 
   color: #00ff9f; 
@@ -2078,9 +2176,10 @@ header p {
   max-width: 600px;
   margin: 0 auto;
   padding: 24px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 255, 159, 0.05);
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(0, 255, 159, 0.2);
+  box-shadow: 0 4px 20px rgba(0, 255, 159, 0.1);
 }
 
 .file-selector-header {
@@ -2111,19 +2210,20 @@ header p {
 }
 
 .file-input-drop-zone {
-  border: 2px dashed rgba(255, 255, 255, 0.3);
+  border: 2px dashed rgba(0, 255, 159, 0.4);
   border-radius: 8px;
   padding: 40px 20px;
   text-align: center;
   transition: all 0.3s ease;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(0, 255, 159, 0.02);
 }
 
 .file-input-drop-zone:hover,
 .file-input-drop-zone.drag-over {
-  border-color: #6366f1;
-  background: rgba(14, 165, 233, 0.1);
+  border-color: #00ff9f;
+  background: rgba(0, 255, 159, 0.1);
   transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(0, 255, 159, 0.2);
 }
 
 .file-input-content {
@@ -2134,12 +2234,12 @@ header p {
 }
 
 .file-upload-icon {
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(0, 255, 159, 0.6);
   transition: color 0.3s ease;
 }
 
 .file-input-drop-zone:hover .file-upload-icon {
-  color: #6366f1;
+  color: #00ff9f;
 }
 
 .file-input-text {
