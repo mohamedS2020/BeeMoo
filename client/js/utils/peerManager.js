@@ -191,10 +191,41 @@ export class PeerManager {
   async replaceLocalStream(newStream) {
     this.currentLocalStream = newStream;
     for (const pc of this.peerIdToPc.values()) {
-      const senders = pc.getSenders().filter(s => s.track && s.track.kind === 'audio');
+      // Only replace microphone audio tracks, not video audio tracks
+      const senders = pc.getSenders().filter(s => {
+        if (!s.track || s.track.kind !== 'audio') return false;
+        
+        // Check if this is a video audio track by looking at the stream context
+        // Video audio tracks are added when video streaming starts and have different characteristics
+        const track = s.track;
+        
+        // Video audio tracks typically have specific labels or come from video streams
+        // Exclude tracks that are likely from video streams
+        if (track.label === 'video-audio' || 
+            track.label.includes('video') || 
+            track.label.includes('movie')) {
+          return false;
+        }
+        
+        // If this sender was added as part of the video stream, don't replace it
+        if (this.currentVideoStream) {
+          const videoAudioTracks = this.currentVideoStream.getAudioTracks();
+          if (videoAudioTracks.some(vt => vt.id === track.id)) {
+            return false;
+          }
+        }
+        
+        return true; // This is likely a microphone track
+      });
+      
       const newTrack = newStream.getAudioTracks()[0];
       for (const s of senders) {
-        try { await s.replaceTrack(newTrack); } catch {}
+        try { 
+          await s.replaceTrack(newTrack); 
+          console.log('🎙️ Replaced microphone audio track');
+        } catch (error) {
+          console.warn('⚠️ Failed to replace audio track:', error);
+        }
       }
     }
   }
@@ -225,6 +256,26 @@ export class PeerManager {
 
       // Add video and audio tracks to all existing peer connections
       for (const [peerId, pc] of this.peerIdToPc.entries()) {
+        // Ensure microphone audio tracks are present before adding video tracks
+        const existingAudioSenders = pc.getSenders().filter(s => 
+          s.track && s.track.kind === 'audio' && 
+          // Check if this is a microphone track (not video audio)
+          (!s.track.label.includes('video') && !s.track.label.includes('movie') && s.track.label !== 'video-audio')
+        );
+        
+        // If no microphone audio tracks found, add them
+        if (existingAudioSenders.length === 0 && this.currentLocalStream) {
+          const micTracks = this.currentLocalStream.getAudioTracks();
+          for (const track of micTracks) {
+            pc.addTrack(track, this.currentLocalStream);
+            console.log(`🎙️ Added missing microphone track to peer ${peerId} before video streaming:`, {
+              id: track.id,
+              label: track.label,
+              enabled: track.enabled
+            });
+          }
+        }
+        
         // Add video tracks
         for (const track of this.currentVideoStream.getVideoTracks()) {
           const sender = pc.addTrack(track, this.currentVideoStream);
