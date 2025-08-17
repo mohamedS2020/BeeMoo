@@ -256,24 +256,39 @@ export class PeerManager {
 
       // Add video and audio tracks to all existing peer connections
       for (const [peerId, pc] of this.peerIdToPc.entries()) {
-        // Ensure microphone audio tracks are present before adding video tracks
-        const existingAudioSenders = pc.getSenders().filter(s => 
-          s.track && s.track.kind === 'audio' && 
-          // Check if this is a microphone track (not video audio)
-          (!s.track.label.includes('video') && !s.track.label.includes('movie') && s.track.label !== 'video-audio')
-        );
+        // Check for existing microphone audio tracks
+        const allAudioSenders = pc.getSenders().filter(s => s.track && s.track.kind === 'audio');
         
-        // If no microphone audio tracks found, add them
-        if (existingAudioSenders.length === 0 && this.currentLocalStream) {
+        // Check if we already have microphone tracks by comparing with current local stream
+        let hasMicrophoneTrack = false;
+        if (this.currentLocalStream) {
+          const currentMicTracks = this.currentLocalStream.getAudioTracks();
+          hasMicrophoneTrack = allAudioSenders.some(sender => 
+            currentMicTracks.some(micTrack => 
+              sender.track && sender.track.id === micTrack.id
+            )
+          );
+        }
+        
+        console.log(`🔍 Peer ${peerId} microphone check:`, {
+          totalAudioSenders: allAudioSenders.length,
+          hasMicrophoneTrack: hasMicrophoneTrack,
+          micTracksAvailable: this.currentLocalStream?.getAudioTracks().length || 0
+        });
+        
+        // Only add microphone tracks if they're missing
+        if (!hasMicrophoneTrack && this.currentLocalStream) {
           const micTracks = this.currentLocalStream.getAudioTracks();
           for (const track of micTracks) {
             pc.addTrack(track, this.currentLocalStream);
-            console.log(`🎙️ Added missing microphone track to peer ${peerId} before video streaming:`, {
+            console.log(`🎙️ Added missing microphone track to peer ${peerId}:`, {
               id: track.id,
               label: track.label,
               enabled: track.enabled
             });
           }
+        } else if (hasMicrophoneTrack) {
+          console.log(`✅ Peer ${peerId} already has microphone tracks, skipping microphone setup`);
         }
         
         // Add video tracks
