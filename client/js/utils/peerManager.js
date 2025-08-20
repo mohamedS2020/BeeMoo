@@ -17,6 +17,11 @@ export class PeerManager {
     this.isHost = false;
     this.videoQuality = 'high';
     this.connectionQuality = new Map(); // peerId -> quality metrics
+    
+    // Track senders separately to maintain control
+    this.microphoneSenders = new Map(); // peerId -> RTCRtpSender for mic audio
+    this.videoSenders = new Map(); // peerId -> RTCRtpSender for video
+    this.videoAudioSenders = new Map(); // peerId -> RTCRtpSender for video audio
 
     // Bind signaling events
     this.signaling.onOffer(async ({ from, sdp }) => {
@@ -123,17 +128,35 @@ export class PeerManager {
           enabled: track.enabled,
           readyState: track.readyState
         });
-        pc.addTrack(track, local);
+        const sender = pc.addTrack(track, local);
+        // Store microphone sender reference
+        if (track.kind === 'audio') {
+          this.microphoneSenders.set(peerId, sender);
+        }
       });
     } else {
       console.warn(`⚠️ No local audio tracks available for peer ${peerId}`);
     }
 
-    // Attach video stream if host
+    // Attach video stream if host and already streaming
     if (this.isHost && this.currentVideoStream) {
+      // Add video tracks
       this.currentVideoStream.getVideoTracks().forEach(track => {
         const sender = pc.addTrack(track, this.currentVideoStream);
+        this.videoSenders.set(peerId, sender);
         this.configureVideoSender(sender, peerId);
+      });
+      
+      // Add video audio tracks with label
+      this.currentVideoStream.getAudioTracks().forEach(track => {
+        // Clone the track and set a label to distinguish it
+        const clonedTrack = track.clone();
+        Object.defineProperty(clonedTrack, 'label', {
+          value: 'video-audio',
+          writable: false
+        });
+        const sender = pc.addTrack(clonedTrack, this.currentVideoStream);
+        this.videoAudioSenders.set(peerId, sender);
       });
     }
 
@@ -185,47 +208,24 @@ export class PeerManager {
       pc.getSenders().forEach(s => { try { pc.removeTrack(s); } catch {} });
       pc.close();
       this.peerIdToPc.delete(peerId);
+      // Clean up sender references
+      this.microphoneSenders.delete(peerId);
+      this.videoSenders.delete(peerId);
+      this.videoAudioSenders.delete(peerId);
     }
   }
 
   async replaceLocalStream(newStream) {
     this.currentLocalStream = newStream;
-    for (const pc of this.peerIdToPc.values()) {
-      // Only replace microphone audio tracks, not video audio tracks
-      const senders = pc.getSenders().filter(s => {
-        if (!s.track || s.track.kind !== 'audio') return false;
-        
-        // Check if this is a video audio track by looking at the stream context
-        // Video audio tracks are added when video streaming starts and have different characteristics
-        const track = s.track;
-        
-        // Video audio tracks typically have specific labels or come from video streams
-        // Exclude tracks that are likely from video streams
-        if (track.label === 'video-audio' || 
-            track.label.includes('video') || 
-            track.label.includes('movie')) {
-          return false;
-        }
-        
-        // If this sender was added as part of the video stream, don't replace it
-        if (this.currentVideoStream) {
-          const videoAudioTracks = this.currentVideoStream.getAudioTracks();
-          if (videoAudioTracks.some(vt => vt.id === track.id)) {
-            return false;
-          }
-        }
-        
-        return true; // This is likely a microphone track
-      });
-      
-      const newTrack = newStream.getAudioTracks()[0];
-      for (const s of senders) {
-        try { 
-          await s.replaceTrack(newTrack); 
-          console.log('🎙️ Replaced microphone audio track');
-        } catch (error) {
-          console.warn('⚠️ Failed to replace audio track:', error);
-        }
+    const newTrack = newStream.getAudioTracks()[0];
+    
+    // Only replace microphone tracks using our stored references
+    for (const [peerId, sender] of this.microphoneSenders.entries()) {
+      try {
+        await sender.replaceTrack(newTrack);
+        console.log(`🎙️ Replaced microphone audio track for peer ${peerId}`);
+      } catch (error) {
+        console.warn(`⚠️ Failed to replace audio track for peer ${peerId}:`, error);
       }
     }
   }
@@ -256,57 +256,54 @@ export class PeerManager {
 
       // Add video and audio tracks to all existing peer connections
       for (const [peerId, pc] of this.peerIdToPc.entries()) {
-        // Check for existing microphone audio tracks
-        const allAudioSenders = pc.getSenders().filter(s => s.track && s.track.kind === 'audio');
-        
-        // Check if we already have microphone tracks by comparing with current local stream
-        let hasMicrophoneTrack = false;
-        if (this.currentLocalStream) {
-          const currentMicTracks = this.currentLocalStream.getAudioTracks();
-          hasMicrophoneTrack = allAudioSenders.some(sender => 
-            currentMicTracks.some(micTrack => 
-              sender.track && sender.track.id === micTrack.id
-            )
-          );
-        }
-        
-        console.log(`🔍 Peer ${peerId} microphone check:`, {
-          totalAudioSenders: allAudioSenders.length,
-          hasMicrophoneTrack: hasMicrophoneTrack,
-          micTracksAvailable: this.currentLocalStream?.getAudioTracks().length || 0
-        });
-        
-        // Only add microphone tracks if they're missing
-        if (!hasMicrophoneTrack && this.currentLocalStream) {
+        // First, ensure microphone track is still present
+        if (!this.microphoneSenders.has(peerId) && this.currentLocalStream) {
           const micTracks = this.currentLocalStream.getAudioTracks();
           for (const track of micTracks) {
-            pc.addTrack(track, this.currentLocalStream);
-            console.log(`🎙️ Added missing microphone track to peer ${peerId}:`, {
-              id: track.id,
-              label: track.label,
-              enabled: track.enabled
-            });
+            const sender = pc.addTrack(track, this.currentLocalStream);
+            this.microphoneSenders.set(peerId, sender);
+            console.log(`🎙️ Re-added microphone track to peer ${peerId}`);
           }
-        } else if (hasMicrophoneTrack) {
-          console.log(`✅ Peer ${peerId} already has microphone tracks, skipping microphone setup`);
         }
         
         // Add video tracks
         for (const track of this.currentVideoStream.getVideoTracks()) {
           const sender = pc.addTrack(track, this.currentVideoStream);
+          this.videoSenders.set(peerId, sender);
           this.configureVideoSender(sender, peerId);
           console.log(`🎥 Added video track to peer ${peerId}`);
         }
         
-        // Add audio tracks from video stream (movie audio)
+        // Add audio tracks from video stream (movie audio) with label
         for (const track of this.currentVideoStream.getAudioTracks()) {
-          const sender = pc.addTrack(track, this.currentVideoStream);
+          // Clone the track and set a label to distinguish it from mic audio
+          const clonedTrack = track.clone();
+          Object.defineProperty(clonedTrack, 'label', {
+            value: 'video-audio',
+            writable: false
+          });
+          const sender = pc.addTrack(clonedTrack, this.currentVideoStream);
+          this.videoAudioSenders.set(peerId, sender);
           console.log(`🔊 Added video audio track to peer ${peerId}:`, {
-            id: track.id,
-            label: track.label,
-            enabled: track.enabled
+            id: clonedTrack.id,
+            label: clonedTrack.label,
+            enabled: clonedTrack.enabled
           });
         }
+        
+        // Verify all tracks are present
+        const senders = pc.getSenders();
+        const audioSenders = senders.filter(s => s.track && s.track.kind === 'audio');
+        const videoSenderCount = senders.filter(s => s.track && s.track.kind === 'video').length;
+        
+        console.log(`📊 Peer ${peerId} track summary after video streaming:`, {
+          totalSenders: senders.length,
+          audioSenders: audioSenders.length,
+          videoSenders: videoSenderCount,
+          hasMicrophone: this.microphoneSenders.has(peerId),
+          hasVideoAudio: this.videoAudioSenders.has(peerId),
+          hasVideo: this.videoSenders.has(peerId)
+        });
         
         // Renegotiate connection to include video and audio
         await this.renegotiatePeer(peerId);
@@ -327,16 +324,27 @@ export class PeerManager {
     if (!this.currentVideoStream) return;
 
     try {
-      // Remove video tracks from all peer connections
-      for (const pc of this.peerIdToPc.values()) {
-        const videoSenders = pc.getSenders().filter(s => s.track && s.track.kind === 'video');
-        for (const sender of videoSenders) {
-          pc.removeTrack(sender);
+      // Remove only video-related tracks from all peer connections
+      for (const [peerId, pc] of this.peerIdToPc.entries()) {
+        // Remove video senders
+        const videoSender = this.videoSenders.get(peerId);
+        if (videoSender) {
+          pc.removeTrack(videoSender);
+          this.videoSenders.delete(peerId);
         }
+        
+        // Remove video audio senders
+        const videoAudioSender = this.videoAudioSenders.get(peerId);
+        if (videoAudioSender) {
+          pc.removeTrack(videoAudioSender);
+          this.videoAudioSenders.delete(peerId);
+        }
+        
+        console.log(`🎥 Removed video and video audio tracks from peer ${peerId}`);
       }
 
       // Stop video stream tracks
-      this.currentVideoStream.getVideoTracks().forEach(track => track.stop());
+      this.currentVideoStream.getTracks().forEach(track => track.stop());
       this.currentVideoStream = null;
 
       // Renegotiate all connections
@@ -430,9 +438,9 @@ export class PeerManager {
     const pc = this.peerIdToPc.get(peerId);
     if (!pc || !this.isHost) return;
 
-    const videoSenders = pc.getSenders().filter(s => s.track && s.track.kind === 'video');
-    for (const sender of videoSenders) {
-      await this.configureVideoSender(sender, peerId);
+    const videoSender = this.videoSenders.get(peerId);
+    if (videoSender) {
+      await this.configureVideoSender(videoSender, peerId);
     }
   }
 
@@ -526,7 +534,7 @@ export class PeerManager {
   destroy() {
     // Stop video streaming if active
     if (this.currentVideoStream) {
-      this.currentVideoStream.getVideoTracks().forEach(track => track.stop());
+      this.currentVideoStream.getTracks().forEach(track => track.stop());
       this.currentVideoStream = null;
     }
 
@@ -538,6 +546,9 @@ export class PeerManager {
     // Clean up
     this.signaling.offAll();
     this.connectionQuality.clear();
+    this.microphoneSenders.clear();
+    this.videoSenders.clear();
+    this.videoAudioSenders.clear();
     
     console.log('🎥 PeerManager destroyed');
   }
