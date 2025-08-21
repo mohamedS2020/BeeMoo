@@ -58,11 +58,11 @@ export class WebRTCUtils {
   /**
    * Create media stream from video element for WebRTC streaming
    * 
-   * FIXED: This method now manages audio levels to prevent video audio from overpowering microphone
-   * by reducing video audio volume while keeping it available for participants. This ensures:
-   * 1. Participants can hear both movie audio AND host's microphone
-   * 2. Host's microphone has priority over video content audio
-   * 3. Proper audio mixing between microphone and video content
+   * CRITICAL FIX: This method now prevents video audio from interfering with microphone audio
+   * by removing all audio tracks from the captured video stream. This ensures:
+   * 1. Only the host's microphone is heard during video streaming
+   * 2. Video content audio doesn't overpower voice chat
+   * 3. Clean audio separation between microphone and video content
    */
   static createVideoStreamFromElement(videoElement, options = {}) {
     try {
@@ -81,20 +81,20 @@ export class WebRTCUtils {
         readyState: videoElement.readyState
       });
       
-      // FIXED: Manage audio levels for proper microphone priority (don't remove video audio)
+      // FIXED: Avoid interfering with existing audio streams during capture
       const originalMuted = videoElement.muted;
       const originalVolume = videoElement.volume;
       
-      // Temporarily unmute for capture but reduce volume to give microphone priority
-      videoElement.muted = false;
-      videoElement.volume = 0.3; // Reduced volume so microphone has priority over video audio
+      // CRITICAL FIX: Mute video element audio to prevent it from overpowering microphone
+      // The video's audio should NOT be transmitted - only the host's microphone should be heard
+      videoElement.muted = true;
+      videoElement.volume = 0; // Ensure no audio interference
       
-      // Capture stream from video element (includes both video and audio)
+      // Capture stream from video element 
       const stream = videoElement.captureStream(frameRate);
       
-      // Restore original state after capture
-      videoElement.muted = originalMuted;
-      videoElement.volume = originalVolume;
+      // Keep video muted to prevent audio conflicts
+      // Don't restore audio state - video audio should stay muted for WebRTC
       
       if (!stream) {
         throw new Error('Failed to capture stream from video element');
@@ -105,31 +105,24 @@ export class WebRTCUtils {
       
       console.log(`🎥 Created stream with ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`);
       
-      // FIXED: Keep video audio but set lower priority for microphone dominance
+      // CRITICAL FIX: Remove all audio tracks from video stream to prevent conflicts
       audioTracks.forEach((track, i) => {
-        console.log(`� Video audio track ${i} (reduced priority for mic dominance):`, {
+        console.log(`🔇 Removing video audio track ${i} to prevent microphone interference:`, {
           id: track.id,
           label: track.label,
-          enabled: track.enabled,
-          readyState: track.readyState
+          enabled: track.enabled
         });
-        
-        // Reduce audio track constraints for lower priority
-        if (track.applyConstraints) {
-          track.applyConstraints({
-            volume: 0.3, // Lower volume to prioritize microphone
-            echoCancellation: false // Disable to avoid interference with mic
-          }).catch(e => console.warn('Could not apply audio constraints:', e));
-        }
+        stream.removeTrack(track);
+        track.stop(); // Stop the track to free resources
       });
       
-      console.log(`✅ Video stream with managed audio: ${videoTracks.length} video tracks, ${audioTracks.length} audio tracks (low priority)`);
+      console.log(`✅ Video stream cleaned: ${stream.getVideoTracks().length} video tracks, ${stream.getAudioTracks().length} audio tracks (should be 0)`);
       
       if (videoTracks.length === 0) {
         throw new Error('No video tracks in captured stream');
       }
 
-      // Log video track details
+      // Log remaining video track details
       videoTracks.forEach((track, i) => {
         console.log(`🎥 Video track ${i}:`, {
           id: track.id,
