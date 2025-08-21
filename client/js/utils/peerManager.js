@@ -71,8 +71,8 @@ export class PeerManager {
           }
         });
         
-        // Handle voice chat audio tracks (separate from video audio)
-        if (track.kind === 'audio' && track.label !== 'video-audio' && this.onRemoteTrack) {
+        // Handle voice chat audio tracks (microphone only - video audio removed for priority)
+        if (track.kind === 'audio' && this.onRemoteTrack) {
           console.log(`🎙️ Voice chat audio track from peer ${peerId}:`, {
             trackId: track.id,
             enabled: track.enabled,
@@ -83,17 +83,14 @@ export class PeerManager {
           this.onRemoteTrack(peerId, stream);
         }
         
-        // Handle video tracks (and their associated video stream)
+        // Handle video tracks (video only - no audio to prevent interference)
         if (track.kind === 'video' && this.onRemoteVideoTrack) {
           console.log(`🎥 Video track from peer ${peerId} - calling onRemoteVideoTrack`);
           this.onRemoteVideoTrack(peerId, stream);
         }
         
-        // Handle video audio tracks
-        if (track.kind === 'audio' && (track.label === 'video-audio' || stream.getVideoTracks().length > 0)) {
-          console.log(`🔊 Video audio track from peer ${peerId} - will be handled with video stream`);
-          // Video audio will be handled by the video element when stream is assigned
-        }
+        // REMOVED: Video audio track handling - no longer transmitted to prevent microphone interference
+        // Video streams should now only contain video tracks, audio comes separately from microphone
       }
     };
 
@@ -132,6 +129,20 @@ export class PeerManager {
         // Store microphone sender reference
         if (track.kind === 'audio') {
           this.microphoneSenders.set(peerId, sender);
+          
+          // FIXED: Add track event listeners to detect when mic tracks become inactive
+          track.addEventListener('ended', () => {
+            console.warn(`⚠️ Microphone track ended for peer ${peerId}`);
+            this.microphoneSenders.delete(peerId);
+          });
+          
+          track.addEventListener('mute', () => {
+            console.warn(`🔇 Microphone track muted for peer ${peerId}`);
+          });
+          
+          track.addEventListener('unmute', () => {
+            console.log(`🔊 Microphone track unmuted for peer ${peerId}`);
+          });
         }
       });
     } else {
@@ -242,6 +253,9 @@ export class PeerManager {
     }
 
     try {
+      // FIXED: Ensure local stream is available before video streaming
+      await this.ensureLocalStream();
+      
       // Check WebRTC support
       const support = WebRTCUtils.checkWebRTCSupport();
       if (!support.supported) {
@@ -264,14 +278,40 @@ export class PeerManager {
 
       // Add video and audio tracks to all existing peer connections
       for (const [peerId, pc] of this.peerIdToPc.entries()) {
-        // First, ensure microphone track is still present
-        if (!this.microphoneSenders.has(peerId) && this.currentLocalStream) {
+        // FIXED: Verify microphone track is active, not just if sender exists
+        const micSender = this.microphoneSenders.get(peerId);
+        const micTrackActive = micSender?.track?.enabled && micSender?.track?.readyState === 'live';
+        
+        if (!micTrackActive && this.currentLocalStream) {
+          console.log(`🔧 Microphone track inactive for peer ${peerId}, re-establishing...`);
+          
+          // Remove inactive sender if it exists
+          if (micSender) {
+            try {
+              pc.removeTrack(micSender);
+              console.log(`🗑️ Removed inactive microphone sender for peer ${peerId}`);
+            } catch (error) {
+              console.warn(`⚠️ Failed to remove inactive mic sender for peer ${peerId}:`, error);
+            }
+          }
+          
+          // Add fresh microphone track
           const micTracks = this.currentLocalStream.getAudioTracks();
           for (const track of micTracks) {
-            const sender = pc.addTrack(track, this.currentLocalStream);
-            this.microphoneSenders.set(peerId, sender);
-            console.log(`🎙️ Re-added microphone track to peer ${peerId}`);
+            if (track.enabled && track.readyState === 'live') {
+              const sender = pc.addTrack(track, this.currentLocalStream);
+              this.microphoneSenders.set(peerId, sender);
+              console.log(`🎙️ Added fresh microphone track to peer ${peerId}:`, {
+                trackId: track.id,
+                enabled: track.enabled,
+                readyState: track.readyState
+              });
+            }
           }
+        } else if (micTrackActive) {
+          console.log(`✅ Microphone track already active for peer ${peerId}`);
+        } else if (!this.currentLocalStream) {
+          console.warn(`⚠️ No local stream available for peer ${peerId}`);
         }
         
         // Add video tracks
@@ -282,21 +322,14 @@ export class PeerManager {
           console.log(`🎥 Added video track to peer ${peerId}`);
         }
         
-        // Add audio tracks from video stream (movie audio) with label
-        for (const track of this.currentVideoStream.getAudioTracks()) {
-          // Clone the track and set a label to distinguish it from mic audio
-          const clonedTrack = track.clone();
-          Object.defineProperty(clonedTrack, 'label', {
-            value: 'video-audio',
-            writable: false
-          });
-          const sender = pc.addTrack(clonedTrack, this.currentVideoStream);
-          this.videoAudioSenders.set(peerId, sender);
-          console.log(`🔊 Added video audio track to peer ${peerId}:`, {
-            id: clonedTrack.id,
-            label: clonedTrack.label,
-            enabled: clonedTrack.enabled
-          });
+        // CRITICAL FIX: DO NOT add video audio tracks - they interfere with microphone
+        // Video audio has been removed in webrtc.js to prevent overpowering microphone
+        const videoAudioTracks = this.currentVideoStream.getAudioTracks();
+        if (videoAudioTracks.length > 0) {
+          console.warn(`⚠️ Video stream still has ${videoAudioTracks.length} audio tracks - this should not happen`);
+          console.warn('� Video audio tracks should be removed in webrtc.js to prevent microphone interference');
+        } else {
+          console.log('✅ Video stream has no audio tracks - microphone audio will have priority');
         }
         
         // Verify all tracks are present
@@ -309,13 +342,17 @@ export class PeerManager {
           audioSenders: audioSenders.length,
           videoSenders: videoSenderCount,
           hasMicrophone: this.microphoneSenders.has(peerId),
-          hasVideoAudio: this.videoAudioSenders.has(peerId),
-          hasVideo: this.videoSenders.has(peerId)
+          hasVideoAudio: false, // Always false now - video audio removed to prevent interference
+          hasVideo: this.videoSenders.has(peerId),
+          microphoneEnabled: this.microphoneSenders.get(peerId)?.track?.enabled || false
         });
         
         // Renegotiate connection to include video and audio
         await this.renegotiatePeer(peerId);
       }
+
+      // FIXED: Verify microphone tracks are still active after video streaming setup
+      await this.verifyAndRestoreMicrophoneTracks();
 
       return { success: true, stream: this.currentVideoStream };
       
@@ -460,16 +497,44 @@ export class PeerManager {
   }
 
   /**
-   * Renegotiate peer connection (for adding/removing tracks)
+   * Renegotiate peer connection while preserving existing tracks
    */
   async renegotiatePeer(peerId) {
     const pc = this.peerIdToPc.get(peerId);
     if (!pc) return;
 
     try {
+      // FIXED: Verify all essential tracks before renegotiation
+      const micSender = this.microphoneSenders.get(peerId);
+      const hasMicTrack = micSender?.track?.enabled && micSender?.track?.readyState === 'live';
+      
+      console.log(`🔄 Renegotiating peer ${peerId} - mic track status:`, {
+        hasMicSender: !!micSender,
+        micTrackEnabled: micSender?.track?.enabled,
+        micTrackState: micSender?.track?.readyState,
+        hasMicTrack
+      });
+      
+      // If microphone track is missing during renegotiation, re-add it
+      if (!hasMicTrack && this.currentLocalStream) {
+        console.log(`🔧 Re-adding microphone track during renegotiation for peer ${peerId}`);
+        
+        const micTracks = this.currentLocalStream.getAudioTracks();
+        for (const track of micTracks) {
+          if (track.enabled && track.readyState === 'live') {
+            const sender = pc.addTrack(track, this.currentLocalStream);
+            this.microphoneSenders.set(peerId, sender);
+            console.log(`🎙️ Microphone track re-added during renegotiation for peer ${peerId}`);
+            break; // Only need one mic track
+          }
+        }
+      }
+      
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       this.signaling.sendOffer(offer, peerId);
+      
+      console.log(`✅ Renegotiation completed for peer ${peerId}`);
     } catch (error) {
       console.error(`❌ Failed to renegotiate peer ${peerId}:`, error);
     }
@@ -496,6 +561,72 @@ export class PeerManager {
   setHost(isHost) {
     this.isHost = isHost;
     console.log(`🎥 Peer role set to: ${isHost ? 'HOST' : 'PARTICIPANT'}`);
+  }
+
+  /**
+   * FIXED: Verify and restore microphone tracks for all peers
+   * Call this method after any operation that might affect audio tracks
+   */
+  async verifyAndRestoreMicrophoneTracks() {
+    if (!this.currentLocalStream) {
+      console.warn('⚠️ No local stream available for microphone verification');
+      return;
+    }
+
+    const localMicTracks = this.currentLocalStream.getAudioTracks().filter(t => 
+      t.enabled && t.readyState === 'live'
+    );
+
+    if (localMicTracks.length === 0) {
+      console.warn('⚠️ No active microphone tracks in local stream');
+      return;
+    }
+
+    for (const [peerId, pc] of this.peerIdToPc.entries()) {
+      const micSender = this.microphoneSenders.get(peerId);
+      const hasMicTrack = micSender?.track?.enabled && micSender?.track?.readyState === 'live';
+
+      if (!hasMicTrack) {
+        console.log(`🔧 Restoring microphone track for peer ${peerId}`);
+        
+        // Remove inactive sender if exists
+        if (micSender) {
+          try {
+            pc.removeTrack(micSender);
+          } catch (error) {
+            console.warn(`⚠️ Failed to remove inactive mic sender for peer ${peerId}:`, error);
+          }
+        }
+
+        // Add active microphone track
+        const activeMicTrack = localMicTracks[0]; // Use first active track
+        try {
+          const sender = pc.addTrack(activeMicTrack, this.currentLocalStream);
+          this.microphoneSenders.set(peerId, sender);
+          console.log(`✅ Microphone track restored for peer ${peerId}`);
+        } catch (error) {
+          console.error(`❌ Failed to restore microphone track for peer ${peerId}:`, error);
+        }
+      }
+    }
+  }
+
+  /**
+   * FIXED: Ensure local stream is available and active before operations
+   */
+  async ensureLocalStream() {
+    console.log('🎙️ Creating new local audio stream...');
+    try {
+      this.currentLocalStream = await this.localStreamProvider();
+      console.log('✅ Local audio stream created:', {
+        tracks: this.currentLocalStream.getAudioTracks().length,
+        activeTrack: this.currentLocalStream.getAudioTracks()[0]?.enabled
+      });
+      return this.currentLocalStream;
+    } catch (error) {
+      console.error('❌ Failed to create local stream:', error);
+      throw error;
+    }
   }
 
   async _getOrCreateLocalStream() {
@@ -533,10 +664,6 @@ export class PeerManager {
     } catch (error) {
       console.error(`❌ Failed to restart connection to peer ${peerId}:`, error);
     }
-  }
-
-  async ensureLocalStream() {
-    return await this._getOrCreateLocalStream();
   }
 
   destroy() {
