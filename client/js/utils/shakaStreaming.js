@@ -40,15 +40,43 @@ export class ShakaStreamingManager {
     this.duration = 0;
     this.bufferedPercent = 0;
     
-    // Simple Shaka Player configuration - let Shaka handle the complexity
+    // Shaka Player configuration
     this.shakaConfig = {
       streaming: {
-        bufferingGoal: 30,          // 30s buffer ahead
-        rebufferingGoal: 5,         // 5s minimum buffer
-        bufferBehind: 10            // Keep 10s behind current position
+        bufferingGoal: 30,          // 30s buffer ahead (matches original)
+        rebufferingGoal: 5,         // 5s minimum buffer (matches original)
+        bufferBehind: 30,           // Keep 30s behind current position
+        retryParameters: {
+          timeout: 30000,           // 30s timeout for requests
+          maxAttempts: 3,           // 3 retry attempts
+          baseDelay: 1000,          // 1s base delay
+          backoffFactor: 2,         // Exponential backoff
+          fuzzFactor: 0.5           // Add randomization
+        }
       },
       abr: {
-        enabled: false              // Disable ABR for local blob files
+        enabled: true,              // Enable adaptive bitrate
+        useNetworkInformation: true, // Use Network Information API
+        defaultBandwidthEstimate: 1000000, // 1 Mbps default
+        restrictions: {
+          minBandwidth: 0,
+          maxBandwidth: Infinity,
+          minHeight: 240,
+          maxHeight: Infinity,
+          minWidth: 320,
+          maxWidth: Infinity,
+          minFrameRate: 1,
+          maxFrameRate: Infinity
+        }
+      },
+      manifest: {
+        retryParameters: {
+          timeout: 30000,
+          maxAttempts: 3,
+          baseDelay: 1000,
+          backoffFactor: 2,
+          fuzzFactor: 0.5
+        }
       }
     };
     
@@ -77,56 +105,46 @@ export class ShakaStreamingManager {
   }
   
   /**
-   * Initialize streaming with file - simplified to use Shaka's native capabilities
+   * Initialize streaming with file - enhanced for Shaka Player
    */
   async initializeStreaming(file, videoElement, options = {}) {
     this.file = file;
     this.videoElement = videoElement;
     this.isHost = options.isHost || false;
-
+    
     // If browser doesn't support Shaka, use legacy manager
     if (this.useFallbackMode && this.legacyManager) {
       console.log('🔄 Using legacy streaming manager for unsupported browser');
       return this.legacyManager.initializeStreaming(file, videoElement, options);
     }
-
+    
+    // For small files (< 200MB), use direct blob URL for better compatibility
+    // This maintains your original logic for smaller files
+    if (file.size < 200 * 1024 * 1024) {
+      console.log('🔧 Small/medium file detected, using direct blob streaming with Shaka Player');
+      return this.initializeDirectStreaming(file, videoElement, options);
+    }
+    
     try {
       // Create Shaka Player instance
       this.player = new shaka.Player(videoElement);
       
-      // Simple, clean configuration - let Shaka handle the complexity
-      this.player.configure({
-        streaming: {
-          bufferingGoal: 30,
-          rebufferingGoal: 5,
-          bufferBehind: 10
-        },
-        abr: {
-          enabled: false // Disable ABR for local files
-        }
-      });
+      // Configure Shaka Player with BeeMoo-specific settings
+      this.player.configure(this.shakaConfig);
       
       // Setup Shaka event listeners
       this.setupShakaEvents();
       
-      // Let Shaka handle the blob URL directly - it knows what to do
-      console.log('🎬 Initializing Shaka Player with native blob URL handling');
-      const blobUrl = URL.createObjectURL(file);
-      this.manifestUri = blobUrl; // Store for cleanup
+      // For local files, we need to create a manifest or use MSE directly
+      // Since Shaka primarily works with DASH/HLS, we'll use a hybrid approach
+      console.log('📦 Large file detected, initializing Shaka Player with MSE backend');
       
-      await this.player.load(blobUrl);
+      const result = await this.initializeShakaWithMSE(file, options);
       
       this.isStreaming = true;
       this.emit('ready');
       
-      return {
-        duration: this.videoElement.duration || 0,
-        totalChunks: 1,
-        chunkSize: file.size,
-        mimeType: file.type || 'video/mp4',
-        mode: 'shaka-native',
-        player: 'shaka'
-      };
+      return result;
       
     } catch (error) {
       console.error('❌ Shaka Player initialization failed, falling back to legacy:', error);
@@ -139,7 +157,9 @@ export class ShakaStreamingManager {
       
       return this.legacyManager.initializeStreaming(file, videoElement, options);
     }
-  }  /**
+  }
+  
+  /**
    * Initialize direct streaming for smaller files using Shaka Player
    */
   async initializeDirectStreaming(file, videoElement, options = {}) {
@@ -189,12 +209,13 @@ export class ShakaStreamingManager {
         this.setupShakaEvents();
       }
       
-      // FIXED: Enhanced configuration for large local files (removed invalid config keys)
+      // Enhanced configuration for large local files
       this.player.configure({
         streaming: {
           bufferingGoal: 60,        // Buffer 60 seconds ahead
           rebufferingGoal: 10,      // Start rebuffering at 10 seconds
           bufferBehind: 30,         // Keep 30 seconds behind
+          segmentRequestTimeoutMs: 30000,
           maxDisabledTime: 30,
           retryParameters: {
             maxAttempts: 3,
@@ -210,7 +231,7 @@ export class ShakaStreamingManager {
           }
         },
         abr: {
-          enabled: false, // Disable ABR for local files to prevent interference
+          enabled: false, // Disable ABR for local files
           useNetworkInformation: false
         }
       });

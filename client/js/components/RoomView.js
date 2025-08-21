@@ -138,12 +138,10 @@ export class RoomView {
           el.dataset.peer = peerId;
           el.autoplay = true;
           el.playsInline = true;
-          el.volume = 1.0; // Full volume for microphone audio (voice chat priority)
+          el.volume = 1.0;
           el.muted = false;
-          // PRIORITY FIX: Ensure microphone audio gets higher priority
-          el.style.zIndex = '1000'; // Higher z-index for audio priority
           this.root.appendChild(el);
-          console.log(`🔊 Created audio element for peer ${peerId} with voice priority`);
+          console.log(`🔊 Created audio element for peer ${peerId}`);
         }
         
         el.srcObject = stream;
