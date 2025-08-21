@@ -235,20 +235,28 @@ export class PeerManager {
    */
   async startVideoStreaming(videoElement, options = {}) {
     if (!this.isHost) {
-      throw new Error('Only host can start video streaming');
+      // This should not be a thrown error, but a returned status
+      // to be handled by the UI.
+      console.warn('Attempted to start video streaming as a non-host.');
+      return { success: false, error: 'Only the host can start video streaming.' };
     }
 
     try {
       // Check WebRTC support
       const support = WebRTCUtils.checkWebRTCSupport();
       if (!support.supported) {
-        throw new Error('Browser does not support required WebRTC features');
+        // Return a failure object instead of throwing an error
+        const errorMessage = 'Browser does not support required WebRTC features';
+        console.error(`❌ ${errorMessage}`);
+        return { success: false, error: errorMessage };
       }
 
       // Create video stream from video element
       const result = WebRTCUtils.createVideoStreamFromElement(videoElement, options);
       if (!result.success) {
-        throw new Error(`Failed to create video stream: ${result.error.message}`);
+        // The result object already contains the error, so just return it
+        console.error(`❌ Failed to create video stream: ${result.error?.message}`);
+        return { success: false, error: `Failed to create video stream: ${result.error?.message}` };
       }
 
       this.currentVideoStream = result.stream;

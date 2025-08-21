@@ -1,14 +1,20 @@
 // BeeMoo - Advanced Video Player Component
-// Integrates with StreamingManager for progressive video playback
+// Integrates with Shaka Player for enhanced adaptive streaming
 
-import { StreamingManager } from '../utils/streaming.js';
+import { ShakaStreamingManager } from '../utils/shakaStreaming.js';
 import { SynchronizationManager } from '../utils/synchronization.js';
+
+// Import Shaka Player for error handling
+let shaka = null;
+if (typeof window !== 'undefined' && window.shaka) {
+  shaka = window.shaka;
+}
 
 export class VideoPlayer {
   constructor(socketClient, onStateChange) {
     this.socketClient = socketClient;
     this.onStateChange = onStateChange; // Callback for state changes
-    this.streamingManager = new StreamingManager();
+    this.streamingManager = new ShakaStreamingManager();
     this.syncManager = new SynchronizationManager(socketClient);
     this.container = null;
     this.videoElement = null;
@@ -46,11 +52,11 @@ export class VideoPlayer {
   }
   
   /**
-   * Setup streaming manager events
+   * Setup streaming manager events (enhanced for Shaka Player)
    */
   setupStreamingEvents() {
     this.streamingManager.on('ready', () => {
-      console.log('🎬 Video ready for playback');
+      console.log('🎬 Video ready for playback (Shaka Player)');
       this.hideError(); // Hide any previous error when streaming is ready
       this.updatePlayerState();
       this.emit('ready');
@@ -72,6 +78,27 @@ export class VideoPlayer {
       this.updateBufferIndicator(health);
     });
     
+    // Enhanced Shaka Player events
+    this.streamingManager.on('quality-change', (qualityInfo) => {
+      console.log(`📊 Quality changed: ${qualityInfo.height}p @ ${Math.round(qualityInfo.bandwidth / 1000)}kbps`);
+      this.updateQualityIndicator(qualityInfo);
+      this.emit('quality-changed', qualityInfo);
+    });
+    
+    this.streamingManager.on('stats-updated', (stats) => {
+      this.updateAdvancedStats(stats);
+    });
+    
+    this.streamingManager.on('buffer-warning', (warning) => {
+      console.warn('⚠️ Buffer warning:', warning.message);
+      this.showBufferWarning(warning);
+    });
+    
+    this.streamingManager.on('buffer-healthy', (info) => {
+      this.hideBufferWarning();
+    });
+    
+    // Legacy events for backward compatibility
     this.streamingManager.on('chunk-loaded', (progress) => {
       this.updateLoadingProgress(progress);
     });
@@ -81,8 +108,14 @@ export class VideoPlayer {
       
       let errorMessage = 'Streaming error: ' + (error?.message || 'Unknown error');
       
-      // More specific error messages
-      if (error?.message?.includes('MediaSource') || error?.message?.includes('SourceBuffer')) {
+      // Enhanced error handling for Shaka Player
+      if (shaka && error?.category === shaka.util.Error.Category.NETWORK) {
+        errorMessage = 'Network error: Please check your connection and try again.';
+      } else if (shaka && error?.category === shaka.util.Error.Category.MEDIA) {
+        errorMessage = 'Media error: This video format may not be supported.';
+      } else if (shaka && error?.category === shaka.util.Error.Category.MANIFEST) {
+        errorMessage = 'Manifest error: There was an issue loading the video metadata.';
+      } else if (error?.message?.includes('MediaSource') || error?.message?.includes('SourceBuffer')) {
         errorMessage = 'Video streaming failed. The file will be loaded directly instead.';
         
         // Try direct fallback as last resort
@@ -150,7 +183,8 @@ export class VideoPlayer {
       
       const streamingResult = await this.streamingManager.initializeStreaming(file, this.videoElement, {
         chunkSize: this.calculateOptimalChunkSize(file.size),
-        bufferTimeAhead: 30
+        bufferTimeAhead: 30,
+        isHost: isHost  // Pass host status to streaming manager
       });
       
       console.log('🎬 Streaming initialization completed:', streamingResult);
@@ -767,6 +801,11 @@ export class VideoPlayer {
                         <path fill="currentColor" d="M12,18A6,6 0 0,1 6,12C6,11 6.25,10.03 6.7,9.2L5.24,7.74C4.46,8.97 4,10.43 4,12A8,8 0 0,0 12,20V23L16,19L12,15M12,4V1L8,5L12,9V6A6,6 0 0,1 18,12C18,13 17.75,13.97 17.3,14.8L18.76,16.26C19.54,15.03 20,13.57 20,12A8,8 0 0,0 12,4Z" />
                       </svg>
                     </button>
+                    <button class="control-btn quality-btn" id="quality-btn" title="Video Quality Settings">
+                      <svg viewBox="0 0 24 24" width="20" height="20">
+                        <path fill="currentColor" d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.98C19.47,12.66 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11.02L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.65 15.48,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.52,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.22,8.95 2.27,9.22 2.46,9.37L4.57,11.02C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.52,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.48,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.98Z" />
+                      </svg>
+                    </button>
                   </div>
                 ` : `
                   <div class="participant-indicator" title="Playback is controlled by the host">
@@ -869,6 +908,9 @@ export class VideoPlayer {
     
     const syncBtn = this.container.querySelector('#sync-btn');
     syncBtn?.addEventListener('click', () => this.syncWithParticipants());
+    
+    const qualityBtn = this.container.querySelector('#quality-btn');
+    qualityBtn?.addEventListener('click', () => this.showQualityMenu());
     
     const retryBtn = this.container.querySelector('#retry-btn');
     retryBtn?.addEventListener('click', () => this.retry());
@@ -1390,6 +1432,138 @@ export class VideoPlayer {
   }
 
   /**
+   * Update quality indicator with current streaming quality (Shaka Player)
+   */
+  updateQualityIndicator(qualityInfo) {
+    const qualityDisplay = this.container.querySelector('#quality-display');
+    
+    if (qualityDisplay) {
+      const qualityText = `${qualityInfo.height}p`;
+      const bandwidthText = `${Math.round(qualityInfo.bandwidth / 1000)}k`;
+      
+      qualityDisplay.innerHTML = `
+        <span class="quality-resolution">${qualityText}</span>
+        <span class="quality-bandwidth">${bandwidthText}</span>
+      `;
+      
+      // Add quality indicator if it doesn't exist
+      if (!this.container.querySelector('#quality-indicator')) {
+        const controlsRow = this.container.querySelector('.controls-row');
+        if (controlsRow) {
+          const qualityIndicator = document.createElement('div');
+          qualityIndicator.id = 'quality-indicator';
+          qualityIndicator.className = 'quality-indicator';
+          qualityIndicator.innerHTML = `
+            <span class="quality-label">Quality:</span>
+            <span id="quality-display">${qualityText} (${bandwidthText})</span>
+          `;
+          controlsRow.appendChild(qualityIndicator);
+        }
+      }
+    }
+  }
+
+  /**
+   * Update advanced streaming statistics display (Shaka Player)
+   */
+  updateAdvancedStats(stats) {
+    // Only show detailed stats in development or when explicitly enabled
+    if (import.meta.env.DEV) {
+      const statsDisplay = this.container.querySelector('#advanced-stats');
+      
+      if (statsDisplay) {
+        const shakaStats = stats.shakaStats || {};
+        
+        statsDisplay.innerHTML = `
+          <div class="stats-grid">
+            <div class="stat-item">
+              <span class="stat-label">Bandwidth:</span>
+              <span class="stat-value">${Math.round((shakaStats.estimatedBandwidth || 0) / 1000)}k</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Dropped Frames:</span>
+              <span class="stat-value">${shakaStats.droppedFrames || 0}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Buffer Health:</span>
+              <span class="stat-value">${Math.round(stats.bufferHealth)}%</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Adaptations:</span>
+              <span class="stat-value">${stats.adaptationCount}</span>
+            </div>
+          </div>
+        `;
+      } else {
+        // Create stats display if it doesn't exist
+        const playerContainer = this.container.querySelector('.video-player-container');
+        if (playerContainer) {
+          const advancedStats = document.createElement('div');
+          advancedStats.id = 'advanced-stats';
+          advancedStats.className = 'advanced-stats';
+          advancedStats.style.cssText = `
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 1000;
+          `;
+          playerContainer.appendChild(advancedStats);
+        }
+      }
+    }
+  }
+
+  /**
+   * Show buffer warning message
+   */
+  showBufferWarning(warning) {
+    let warningElement = this.container.querySelector('#buffer-warning');
+    
+    if (!warningElement) {
+      const playerContainer = this.container.querySelector('.video-player-container');
+      if (playerContainer) {
+        warningElement = document.createElement('div');
+        warningElement.id = 'buffer-warning';
+        warningElement.className = 'buffer-warning';
+        warningElement.style.cssText = `
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          background: rgba(239, 68, 68, 0.9);
+          color: white;
+          padding: 12px 16px;
+          border-radius: 6px;
+          font-size: 14px;
+          z-index: 1001;
+          pointer-events: none;
+        `;
+        playerContainer.appendChild(warningElement);
+      }
+    }
+    
+    if (warningElement) {
+      warningElement.textContent = `⚠️ ${warning.message}`;
+      warningElement.style.display = 'block';
+    }
+  }
+
+  /**
+   * Hide buffer warning message
+   */
+  hideBufferWarning() {
+    const warningElement = this.container.querySelector('#buffer-warning');
+    if (warningElement) {
+      warningElement.style.display = 'none';
+    }
+  }
+
+  /**
    * Update sync quality indicator based on synchronization statistics
    */
   updateSyncQualityIndicator(syncStats) {
@@ -1678,6 +1852,126 @@ export class VideoPlayer {
     if (bufferingOverlay) {
       bufferingOverlay.style.display = show ? 'flex' : 'none';
     }
+  }
+  
+  /**
+   * Show quality selection menu (Shaka Player feature)
+   */
+  showQualityMenu() {
+    // Only available for hosts using Shaka Player
+    if (!this.isHost || !this.streamingManager.getQualityLevels) {
+      console.log('Quality menu not available');
+      return;
+    }
+    
+    const qualityLevels = this.streamingManager.getQualityLevels();
+    
+    if (qualityLevels.length <= 1) {
+      console.log('No quality options available');
+      return;
+    }
+    
+    // Remove existing menu
+    const existingMenu = this.container.querySelector('#quality-menu');
+    if (existingMenu) {
+      existingMenu.remove();
+      return; // Toggle behavior
+    }
+    
+    // Create quality menu
+    const qualityMenu = document.createElement('div');
+    qualityMenu.id = 'quality-menu';
+    qualityMenu.className = 'quality-menu';
+    qualityMenu.style.cssText = `
+      position: absolute;
+      bottom: 60px;
+      right: 10px;
+      background: rgba(0,0,0,0.9);
+      border-radius: 6px;
+      padding: 8px;
+      min-width: 120px;
+      z-index: 1002;
+      color: white;
+      font-size: 14px;
+    `;
+    
+    // Add auto option
+    const autoOption = document.createElement('div');
+    autoOption.className = 'quality-option';
+    autoOption.style.cssText = `
+      padding: 8px 12px;
+      cursor: pointer;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    `;
+    autoOption.innerHTML = `
+      <span>Auto</span>
+      <span style="color: #10b981;">✓</span>
+    `;
+    
+    autoOption.addEventListener('click', () => {
+      this.streamingManager.setAdaptiveStreaming(true);
+      qualityMenu.remove();
+      console.log('📊 Quality set to auto');
+    });
+    
+    qualityMenu.appendChild(autoOption);
+    
+    // Add manual quality options
+    qualityLevels.forEach(level => {
+      const option = document.createElement('div');
+      option.className = 'quality-option';
+      option.style.cssText = `
+        padding: 8px 12px;
+        cursor: pointer;
+        border-radius: 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      `;
+      
+      const qualityText = `${level.height}p`;
+      const bandwidthText = `${Math.round(level.bandwidth / 1000)}k`;
+      
+      option.innerHTML = `
+        <span>${qualityText}</span>
+        <span style="color: rgba(255,255,255,0.6); font-size: 12px;">${bandwidthText}</span>
+        ${level.active ? '<span style="color: #10b981;">✓</span>' : ''}
+      `;
+      
+      option.addEventListener('click', () => {
+        this.streamingManager.setAdaptiveStreaming(false);
+        this.streamingManager.setQuality(level.id);
+        qualityMenu.remove();
+        console.log(`📊 Quality set to ${qualityText}`);
+      });
+      
+      option.addEventListener('mouseenter', () => {
+        option.style.backgroundColor = 'rgba(255,255,255,0.1)';
+      });
+      
+      option.addEventListener('mouseleave', () => {
+        option.style.backgroundColor = 'transparent';
+      });
+      
+      qualityMenu.appendChild(option);
+    });
+    
+    // Close menu when clicking outside
+    const closeMenu = (e) => {
+      if (!qualityMenu.contains(e.target)) {
+        qualityMenu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    
+    setTimeout(() => {
+      document.addEventListener('click', closeMenu);
+    }, 100);
+    
+    this.container.appendChild(qualityMenu);
   }
   
   /**

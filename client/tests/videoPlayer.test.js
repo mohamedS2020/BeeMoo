@@ -1,15 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { VideoPlayer } from '../js/components/VideoPlayer.js';
 
-// Mock StreamingManager
-vi.mock('../js/utils/streaming.js', () => ({
-  StreamingManager: vi.fn().mockImplementation(() => ({
+// Mock ShakaStreamingManager
+vi.mock('../js/utils/shakaStreaming.js', () => ({
+  ShakaStreamingManager: vi.fn().mockImplementation(() => ({
     on: vi.fn(),
     initializeStreaming: vi.fn().mockResolvedValue({
       duration: 120,
       totalChunks: 10,
       chunkSize: 1024 * 1024,
-      mimeType: 'video/mp4'
+      mimeType: 'video/mp4',
+      mode: 'shaka-direct',
+      player: 'shaka'
     }),
     play: vi.fn().mockResolvedValue(undefined),
     pause: vi.fn(),
@@ -18,10 +20,22 @@ vi.mock('../js/utils/streaming.js', () => ({
     stop: vi.fn(),
     getStats: vi.fn(() => ({
       isStreaming: true,
-      currentChunk: 5,
-      totalChunks: 10,
-      bufferedPercent: 50
-    }))
+      currentTime: 30,
+      duration: 120,
+      bufferedPercent: 50,
+      mode: 'shaka',
+      shakaStats: {
+        estimatedBandwidth: 2000000,
+        droppedFrames: 0
+      }
+    })),
+    getQualityLevels: vi.fn(() => [
+      { id: 1, height: 720, width: 1280, bandwidth: 2500000, active: true },
+      { id: 2, height: 480, width: 854, bandwidth: 1500000, active: false }
+    ]),
+    setQuality: vi.fn(),
+    setAdaptiveStreaming: vi.fn(),
+    cleanup: vi.fn()
   }))
 }));
 
@@ -608,6 +622,130 @@ describe('VideoPlayer Component', () => {
       
       const errorMessage = container.querySelector('#error-message');
       expect(errorMessage.textContent).toContain('Retry failed');
+    });
+  });
+
+  describe('Shaka Player Integration', () => {
+    beforeEach(async () => {
+      await videoPlayer.initializeWithFile(mockFile, container, true);
+    });
+
+    it('should show quality menu when quality button is clicked', () => {
+      const qualityBtn = container.querySelector('#quality-btn');
+      expect(qualityBtn).toBeTruthy();
+      
+      // Click quality button
+      qualityBtn.click();
+      
+      const qualityMenu = container.querySelector('#quality-menu');
+      expect(qualityMenu).toBeTruthy();
+    });
+
+    it('should display available quality levels in menu', () => {
+      videoPlayer.showQualityMenu();
+      
+      const qualityMenu = container.querySelector('#quality-menu');
+      const qualityOptions = qualityMenu.querySelectorAll('.quality-option');
+      
+      // Should have auto option + 2 quality levels
+      expect(qualityOptions).toHaveLength(3);
+      
+      // Check for auto option
+      expect(qualityOptions[0].textContent).toContain('Auto');
+      
+      // Check for quality levels
+      expect(qualityOptions[1].textContent).toContain('720p');
+      expect(qualityOptions[2].textContent).toContain('480p');
+    });
+
+    it('should set quality when option is selected', () => {
+      videoPlayer.showQualityMenu();
+      
+      const qualityMenu = container.querySelector('#quality-menu');
+      const qualityOptions = qualityMenu.querySelectorAll('.quality-option');
+      
+      // Click on 720p option (index 1, since 0 is auto)
+      qualityOptions[1].click();
+      
+      expect(videoPlayer.streamingManager.setAdaptiveStreaming).toHaveBeenCalledWith(false);
+      expect(videoPlayer.streamingManager.setQuality).toHaveBeenCalledWith(1);
+    });
+
+    it('should enable adaptive streaming when auto is selected', () => {
+      videoPlayer.showQualityMenu();
+      
+      const qualityMenu = container.querySelector('#quality-menu');
+      const autoOption = qualityMenu.querySelector('.quality-option');
+      
+      autoOption.click();
+      
+      expect(videoPlayer.streamingManager.setAdaptiveStreaming).toHaveBeenCalledWith(true);
+    });
+
+    it('should update quality indicator on quality change', () => {
+      const qualityInfo = {
+        height: 720,
+        width: 1280,
+        bandwidth: 2500000
+      };
+      
+      videoPlayer.updateQualityIndicator(qualityInfo);
+      
+      const qualityDisplay = container.querySelector('#quality-display');
+      expect(qualityDisplay.textContent).toContain('720p');
+      expect(qualityDisplay.textContent).toContain('2500k');
+    });
+
+    it('should handle enhanced streaming events', () => {
+      const qualityChangeHandler = vi.fn();
+      const statsHandler = vi.fn();
+      
+      videoPlayer.on = vi.fn();
+      videoPlayer.setupStreamingEvents();
+      
+      // Verify Shaka-specific events are registered
+      expect(videoPlayer.streamingManager.on).toHaveBeenCalledWith('quality-change', expect.any(Function));
+      expect(videoPlayer.streamingManager.on).toHaveBeenCalledWith('stats-updated', expect.any(Function));
+      expect(videoPlayer.streamingManager.on).toHaveBeenCalledWith('buffer-warning', expect.any(Function));
+    });
+
+    it('should show and hide buffer warnings', () => {
+      const warning = { message: 'Low buffer detected' };
+      
+      videoPlayer.showBufferWarning(warning);
+      
+      const warningElement = container.querySelector('#buffer-warning');
+      expect(warningElement).toBeTruthy();
+      expect(warningElement.textContent).toContain('Low buffer detected');
+      
+      videoPlayer.hideBufferWarning();
+      expect(warningElement.style.display).toBe('none');
+    });
+
+    it('should display advanced stats in development mode', () => {
+      // Mock development environment
+      const originalEnv = import.meta.env;
+      import.meta.env = { ...originalEnv, DEV: true };
+      
+      const stats = {
+        bufferHealth: 85,
+        adaptationCount: 3,
+        shakaStats: {
+          estimatedBandwidth: 2000000,
+          droppedFrames: 2
+        }
+      };
+      
+      videoPlayer.updateAdvancedStats(stats);
+      
+      const statsDisplay = container.querySelector('#advanced-stats');
+      expect(statsDisplay).toBeTruthy();
+      expect(statsDisplay.textContent).toContain('2000k'); // Bandwidth
+      expect(statsDisplay.textContent).toContain('2'); // Dropped frames
+      expect(statsDisplay.textContent).toContain('85%'); // Buffer health
+      
+      // Restore environment
+      import.meta.env = originalEnv;
     });
   });
 

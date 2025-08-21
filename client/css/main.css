@@ -2930,6 +2930,39 @@ header p {
   box-shadow: 0 6px 20px rgba(0, 255, 159, 0.3);
 }
 
+/* Quality Button (Host Only) */
+.quality-btn {
+  background: rgba(139, 92, 246, 0.2);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  box-shadow: 0 4px 15px rgba(139, 92, 246, 0.2);
+}
+
+.quality-btn:hover {
+  background: rgba(139, 92, 246, 0.3);
+  border-color: rgba(139, 92, 246, 0.5);
+  box-shadow: 0 6px 20px rgba(139, 92, 246, 0.3);
+}
+
+/* Quality Menu */
+.quality-menu {
+  animation: slideUpFade 0.2s ease;
+}
+
+@keyframes slideUpFade {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.quality-option:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
 /* Fullscreen Styles */
 .video-player:fullscreen {
   border-radius: 0;
