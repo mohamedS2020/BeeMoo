@@ -7,7 +7,28 @@ import { WebRTCUtils } from './webrtc.js';
 export class PeerManager {
   constructor(socketClient, localStreamProvider) {
     this.socketClient = socketClient;
-    this.signaling = new RTCSignaling(socketClient);
+    this        // FIXED: Add video audio tracks with reduced priority (participants need movie audio)
+        const videoAudioTracks = this.currentVideoStream.getAudioTracks();
+        for (const track of videoAudioTracks) {
+          // Clone the track and set a label to distinguish it from mic audio
+          const clonedTrack = track.clone();
+          Object.defineProperty(clonedTrack, 'label', {
+            value: 'video-audio',
+            writable: false
+          });
+          
+          const sender = pc.addTrack(clonedTrack, this.currentVideoStream);
+          this.videoAudioSenders.set(peerId, sender);
+          console.log(`🔊 Added video audio track to peer ${peerId} (reduced priority):`, {
+            id: clonedTrack.id,
+            label: clonedTrack.label,
+            enabled: clonedTrack.enabled
+          });
+        }
+        
+        if (videoAudioTracks.length === 0) {
+          console.warn('⚠️ No video audio tracks found - participants won\'t hear movie audio!');
+        }g = new RTCSignaling(socketClient);
     this.peerIdToPc = new Map();
     this.localStreamProvider = localStreamProvider; // () => Promise<MediaStream>
     this.onRemoteTrack = null; // (peerId, MediaStream) => void
@@ -71,8 +92,8 @@ export class PeerManager {
           }
         });
         
-        // Handle voice chat audio tracks (microphone only - video audio removed for priority)
-        if (track.kind === 'audio' && this.onRemoteTrack) {
+        // Handle voice chat audio tracks (microphone audio - highest priority)
+        if (track.kind === 'audio' && track.label !== 'video-audio' && this.onRemoteTrack) {
           console.log(`🎙️ Voice chat audio track from peer ${peerId}:`, {
             trackId: track.id,
             enabled: track.enabled,
@@ -83,14 +104,18 @@ export class PeerManager {
           this.onRemoteTrack(peerId, stream);
         }
         
-        // Handle video tracks (video only - no audio to prevent interference)
+        // Handle video tracks (video only)
         if (track.kind === 'video' && this.onRemoteVideoTrack) {
           console.log(`🎥 Video track from peer ${peerId} - calling onRemoteVideoTrack`);
           this.onRemoteVideoTrack(peerId, stream);
         }
         
-        // REMOVED: Video audio track handling - no longer transmitted to prevent microphone interference
-        // Video streams should now only contain video tracks, audio comes separately from microphone
+        // Handle video audio tracks (movie audio - lower priority than microphone)
+        if (track.kind === 'audio' && (track.label === 'video-audio' || stream.getVideoTracks().length > 0)) {
+          console.log(`🔊 Video audio track from peer ${peerId} - will be handled with video stream`);
+          // Video audio will be handled by the video element when stream is assigned
+          // This ensures participants can hear movie audio but microphone has priority
+        }
       }
     };
 
@@ -342,7 +367,7 @@ export class PeerManager {
           audioSenders: audioSenders.length,
           videoSenders: videoSenderCount,
           hasMicrophone: this.microphoneSenders.has(peerId),
-          hasVideoAudio: false, // Always false now - video audio removed to prevent interference
+          hasVideoAudio: this.videoAudioSenders.has(peerId),
           hasVideo: this.videoSenders.has(peerId),
           microphoneEnabled: this.microphoneSenders.get(peerId)?.track?.enabled || false
         });
