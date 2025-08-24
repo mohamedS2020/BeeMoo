@@ -435,6 +435,12 @@ export class RoomView {
           </svg>
           Verify Mic
         </button>
+        <button class="btn btn-warning btn-small" id="reset-flag" title="Reset critical operation flag">
+          <svg viewBox="0 0 24 24" width="16" height="16">
+            <path fill="currentColor" d="M12,5.5A3.5,3.5 0 0,1 15.5,9A3.5,3.5 0 0,1 12,12.5A3.5,3.5 0 0,1 8.5,9A3.5,3.5 0 0,1 12,5.5M5,8C5.56,8 6.08,8.15 6.53,8.42C6.38,9.85 6.8,11.27 7.66,12.38C7.16,13.34 6.16,14 5,14A3,3 0 0,1 2,11A3,3 0 0,1 5,8M19,8A3,3 0 0,1 22,11A3,3 0 0,1 19,14C17.84,14 16.84,13.34 16.34,12.38C17.2,11.27 17.62,9.85 17.47,8.42C17.92,8.15 18.44,8 19,8M5.5,18.25C5.5,16.18 8.41,14.5 12,14.5C15.59,14.5 18.5,16.18 18.5,18.25V20H5.5V18.25M0,20V18.5C0,17.11 1.89,15.94 4.45,15.6C3.86,16.28 3.5,17.22 3.5,18.25V20H0M24,20H20.5V18.25C20.5,17.22 20.14,16.28 19.55,15.6C22.11,15.94 24,17.11 24,18.5V20Z" />
+          </svg>
+          Reset Flag
+        </button>
       </div>
     `;
   }
@@ -459,10 +465,12 @@ export class RoomView {
     const changeBtn = this.root.querySelector('#change-movie');
     const retryBtn = this.root.querySelector('#retry-movie');
     const verifyMicBtn = this.root.querySelector('#verify-mic');
+    const resetFlagBtn = this.root.querySelector('#reset-flag');
     
     changeBtn?.addEventListener('click', () => this.changeMovie());
     retryBtn?.addEventListener('click', () => this.retryMovie());
     verifyMicBtn?.addEventListener('click', () => this.verifyMicrophoneTracks());
+    resetFlagBtn?.addEventListener('click', () => this.resetCriticalOperationFlag());
   }
   
   handleVideoStateChange(state) {
@@ -587,16 +595,47 @@ export class RoomView {
     const deviceId = select?.value || undefined;
 
     try {
+      // Check if settings actually changed to prevent unnecessary stream replacement
+      const currentStream = this.peerManager?.currentLocalStream;
+      if (currentStream) {
+        const currentTrack = currentStream.getAudioTracks()[0];
+        if (currentTrack) {
+          const currentSettings = currentTrack.getSettings();
+          const hasChanged = currentSettings.deviceId !== deviceId ||
+                           currentSettings.echoCancellation !== aec ||
+                           currentSettings.noiseSuppression !== ns ||
+                           currentSettings.autoGainControl !== agc;
+          
+          if (!hasChanged) {
+            console.log('🎙️ Audio settings unchanged, no stream replacement needed');
+            this.showTemporaryMessage('Audio settings unchanged', 'info');
+            return;
+          }
+        }
+      }
+
+      console.log('🎙️ Applying new audio settings...');
       const constraints = WebRTCUtils.getAudioConstraints({
         echoCancellation: aec,
         noiseSuppression: ns,
         autoGainControl: agc,
         deviceId
       });
+      
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-      await this.peerManager.replaceLocalStream(newStream);
+      
+      // CRITICAL: Only replace if we actually have a peer manager and it's safe to do so
+      if (this.peerManager && this.peerManager.currentLocalStream) {
+        await this.peerManager.replaceLocalStream(newStream);
+        console.log('✅ Audio settings applied successfully');
+        this.showTemporaryMessage('Audio settings applied successfully!', 'success');
+      } else {
+        console.warn('⚠️ No peer manager available, cannot apply audio settings');
+        this.showTemporaryMessage('Cannot apply audio settings - no active connection', 'warning');
+      }
     } catch (e) {
-      alert('Failed to apply audio settings. Check permissions and try again.');
+      console.error('❌ Failed to apply audio settings:', e);
+      this.showTemporaryMessage('Failed to apply audio settings. Check permissions and try again.', 'error');
     }
   }
 
@@ -2008,5 +2047,23 @@ export class RoomView {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  /**
+   * Reset critical operation flag (for debugging/testing)
+   */
+  resetCriticalOperationFlag() {
+    if (!this.peerManager) {
+      console.warn('⚠️ No peer manager available');
+      return;
+    }
+    
+    try {
+      this.peerManager.resetCriticalOperationFlag();
+      this.showTemporaryMessage('🔓 Critical operation flag reset', 'success');
+    } catch (error) {
+      console.error('❌ Error resetting critical operation flag:', error);
+      this.showTemporaryMessage('❌ Error resetting flag', 'error');
+    }
   }
 }

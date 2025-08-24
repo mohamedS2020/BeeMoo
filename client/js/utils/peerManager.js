@@ -18,6 +18,9 @@ export class PeerManager {
     this.videoQuality = 'high';
     this.connectionQuality = new Map(); // peerId -> quality metrics
     
+    // CRITICAL: Flag to prevent track replacement during critical operations
+    this.isPerformingCriticalOperation = false;
+    
     // Track senders separately to maintain control
     this.microphoneSenders = new Map(); // peerId -> RTCRtpSender for mic audio
     this.videoSenders = new Map(); // peerId -> RTCRtpSender for video
@@ -216,16 +219,60 @@ export class PeerManager {
   }
 
   async replaceLocalStream(newStream) {
-    this.currentLocalStream = newStream;
+    // CRITICAL FIX: Don't replace tracks unnecessarily - this can cause audio instability
+    // Instead, only replace if the stream is actually different or if there are no existing tracks
+    
+    if (!newStream || !newStream.getAudioTracks().length) {
+      console.warn('⚠️ Invalid new stream provided to replaceLocalStream');
+      return;
+    }
+    
+    // CRITICAL: Prevent track replacement during critical operations like video streaming
+    if (this.isPerformingCriticalOperation) {
+      console.warn('⚠️ Cannot replace local stream during critical operation (video streaming)');
+      return;
+    }
+    
     const newTrack = newStream.getAudioTracks()[0];
     
-    // Only replace microphone tracks using our stored references
+    // Check if we actually need to replace anything
+    if (this.currentLocalStream && 
+        this.currentLocalStream.getAudioTracks().length > 0 &&
+        this.currentLocalStream.getAudioTracks()[0].id === newTrack.id) {
+      console.log('🎙️ Stream is the same, no replacement needed');
+      return;
+    }
+    
+    console.log('🎙️ Replacing local stream with new audio track:', {
+      oldStreamId: this.currentLocalStream?.id,
+      newStreamId: newStream.id,
+      oldTrackId: this.currentLocalStream?.getAudioTracks()[0]?.id,
+      newTrackId: newTrack.id
+    });
+    
+    this.currentLocalStream = newStream;
+    
+    // Instead of using replaceTrack (which can cause audio issues),
+    // remove the old track and add the new one
     for (const [peerId, sender] of this.microphoneSenders.entries()) {
       try {
-        await sender.replaceTrack(newTrack);
-        console.log(`🎙️ Replaced microphone audio track for peer ${peerId}`);
+        const pc = this.peerIdToPc.get(peerId);
+        if (!pc) continue;
+        
+        // Remove the old track
+        pc.removeTrack(sender);
+        
+        // Add the new track
+        const newSender = pc.addTrack(newTrack, newStream);
+        this.microphoneSenders.set(peerId, newSender);
+        
+        console.log(`🎙️ Replaced microphone track for peer ${peerId} using remove/add method`);
+        
+        // Renegotiate to apply the change
+        await this.renegotiatePeer(peerId);
+        
       } catch (error) {
-        console.warn(`⚠️ Failed to replace audio track for peer ${peerId}:`, error);
+        console.error(`❌ Failed to replace audio track for peer ${peerId}:`, error);
       }
     }
   }
@@ -239,9 +286,14 @@ export class PeerManager {
         throw new Error('Only hosts can start video streaming');
       }
 
+      // CRITICAL: Set flag to prevent track replacement during video streaming
+      this.isPerformingCriticalOperation = true;
+      console.log('🔒 Critical operation flag set - preventing track replacement');
+
       if (!videoElement || typeof videoElement.captureStream !== 'function') {
         const errorMessage = 'Video element does not support captureStream';
         console.error(`❌ ${errorMessage}`);
+        this.isPerformingCriticalOperation = false; // Reset flag on error
         return { success: false, error: errorMessage };
       }
 
@@ -250,6 +302,7 @@ export class PeerManager {
       if (!result.success) {
         // The result object already contains the error, so just return it
         console.error(`❌ Failed to create video stream: ${result.error?.message}`);
+        this.isPerformingCriticalOperation = false; // Reset flag on error
         return { success: false, error: `Failed to create video stream: ${result.error?.message}` };
       }
 
@@ -270,16 +323,29 @@ export class PeerManager {
               this.microphoneSenders.set(peerId, sender);
               console.log(`🎙️ Added microphone track to peer ${peerId}`);
             } else {
-              // Verify the existing microphone sender is still valid
+              // CRITICAL: Only replace if the track is actually invalid
+              // Don't replace tracks unnecessarily as this can cause audio issues
               const existingSender = this.microphoneSenders.get(peerId);
-              if (!existingSender.track || existingSender.track.readyState !== 'live') {
-                // Remove invalid sender and add new one
-                try { pc.removeTrack(existingSender); } catch {}
+              const existingTrack = existingSender.track;
+              
+              // Check if the existing track is truly invalid
+              const isTrackInvalid = !existingTrack || 
+                                   existingTrack.readyState === 'ended' || 
+                                   existingTrack.readyState === 'failed';
+              
+              if (isTrackInvalid) {
+                console.log(`🎙️ Existing microphone track for peer ${peerId} is invalid (${existingTrack?.readyState}), replacing...`);
+                try { 
+                  pc.removeTrack(existingSender); 
+                } catch (e) {
+                  console.warn(`⚠️ Error removing invalid track:`, e);
+                }
                 const sender = pc.addTrack(track, this.currentLocalStream);
                 this.microphoneSenders.set(peerId, sender);
                 console.log(`🎙️ Replaced invalid microphone track for peer ${peerId}`);
               } else {
-                console.log(`🎙️ Microphone track for peer ${peerId} is already valid`);
+                // Track is valid - don't touch it
+                console.log(`🎙️ Microphone track for peer ${peerId} is already valid (${existingTrack.readyState})`);
               }
             }
           }
@@ -331,10 +397,12 @@ export class PeerManager {
       // CRITICAL: Ensure microphone tracks are maintained after video streaming
       await this.ensureMicrophoneTracks();
 
+      this.isPerformingCriticalOperation = false; // Reset flag after successful operation
       return { success: true, stream: this.currentVideoStream };
       
     } catch (error) {
       console.error('❌ Failed to start video streaming:', error);
+      this.isPerformingCriticalOperation = false; // Reset flag on error
       return { success: false, error: error.message };
     }
   }
@@ -374,13 +442,27 @@ export class PeerManager {
         await this.renegotiatePeer(peerId);
       }
 
+      // CRITICAL: Reset flag to allow track replacement again
+      this.isPerformingCriticalOperation = false;
+      console.log('🔓 Critical operation flag reset - track replacement allowed');
+
       console.log('🎥 Video streaming stopped');
       return { success: true };
       
     } catch (error) {
       console.error('❌ Failed to stop video streaming:', error);
+      // Reset flag even on error
+      this.isPerformingCriticalOperation = false;
       return { success: false, error: error.message };
     }
+  }
+
+  /**
+   * Manually reset critical operation flag (for debugging/testing)
+   */
+  resetCriticalOperationFlag() {
+    this.isPerformingCriticalOperation = false;
+    console.log('🔓 Critical operation flag manually reset');
   }
 
   /**
@@ -489,11 +571,20 @@ export class PeerManager {
         const micSender = this.microphoneSenders.get(peerId);
         const micTrack = this.currentLocalStream.getAudioTracks()[0];
         
-        if (micTrack && (!micSender.track || micSender.track.readyState !== 'live')) {
-          console.log(`🎙️ Re-attaching microphone track for peer ${peerId} before renegotiation`);
+        // CRITICAL: Only replace if the track is truly invalid
+        // Don't replace tracks unnecessarily as this can cause audio issues
+        const existingTrack = micSender.track;
+        const isTrackInvalid = !existingTrack || 
+                             existingTrack.readyState === 'ended' || 
+                             existingTrack.readyState === 'failed';
+        
+        if (micTrack && isTrackInvalid) {
+          console.log(`🎙️ Re-attaching microphone track for peer ${peerId} before renegotiation (track was ${existingTrack?.readyState})`);
           try { pc.removeTrack(micSender); } catch {}
           const newSender = pc.addTrack(micTrack, this.currentLocalStream);
           this.microphoneSenders.set(peerId, newSender);
+        } else if (micTrack && existingTrack) {
+          console.log(`🎙️ Microphone track for peer ${peerId} is valid (${existingTrack.readyState}), no replacement needed`);
         }
       }
       
@@ -628,13 +719,29 @@ export class PeerManager {
         this.microphoneSenders.set(peerId, sender);
         console.log(`🎙️ Added missing microphone track for peer ${peerId}`);
       } else {
-        // Verify existing microphone sender is valid
+        // CRITICAL: Only replace if the track is truly invalid
+        // Don't replace tracks unnecessarily as this can cause audio issues
         const existingSender = this.microphoneSenders.get(peerId);
-        if (!existingSender.track || existingSender.track.readyState !== 'live') {
-          console.log(`🎙️ Replacing invalid microphone track for peer ${peerId}`);
-          try { pc.removeTrack(existingSender); } catch {}
+        const existingTrack = existingSender.track;
+        
+        // Check if the existing track is truly invalid
+        const isTrackInvalid = !existingTrack || 
+                             existingTrack.readyState === 'ended' || 
+                             existingTrack.readyState === 'failed';
+        
+        if (isTrackInvalid) {
+          console.log(`🎙️ Microphone track for peer ${peerId} is invalid (${existingTrack?.readyState}), replacing...`);
+          try { 
+            pc.removeTrack(existingSender); 
+          } catch (e) {
+            console.warn(`⚠️ Error removing invalid track:`, e);
+          }
           const sender = pc.addTrack(micTrack, this.currentLocalStream);
           this.microphoneSenders.set(peerId, sender);
+          console.log(`🎙️ Replaced invalid microphone track for peer ${peerId}`);
+        } else {
+          // Track is valid - don't touch it
+          console.log(`🎙️ Microphone track for peer ${peerId} is already valid (${existingTrack.readyState})`);
         }
       }
     }
