@@ -429,6 +429,12 @@ export class RoomView {
           </svg>
           Change Movie
         </button>
+        <button class="btn btn-info btn-small" id="verify-mic" title="Verify microphone tracks">
+          <svg viewBox="0 0 24 24" width="16" height="16">
+            <path fill="currentColor" d="M12,2A3,3 0 0,1 15,5V11A3,3 0 0,1 12,14A3,3 0 0,1 9,11V5A3,3 0 0,1 12,2M19,11C19,14.53 16.39,17.44 13,17.93V21H11V17.93C7.61,17.44 5,14.53 5,11H7A5,5 0 0,0 12,16A5,5 0 0,0 17,11H19Z" />
+          </svg>
+          Verify Mic
+        </button>
       </div>
     `;
   }
@@ -452,9 +458,11 @@ export class RoomView {
   bindMovieControls() {
     const changeBtn = this.root.querySelector('#change-movie');
     const retryBtn = this.root.querySelector('#retry-movie');
+    const verifyMicBtn = this.root.querySelector('#verify-mic');
     
     changeBtn?.addEventListener('click', () => this.changeMovie());
     retryBtn?.addEventListener('click', () => this.retryMovie());
+    verifyMicBtn?.addEventListener('click', () => this.verifyMicrophoneTracks());
   }
   
   handleVideoStateChange(state) {
@@ -529,6 +537,10 @@ export class RoomView {
     if (this.movieFileSelector) this.movieFileSelector.destroy();
     if (this.videoPlayer) this.videoPlayer.destroy();
     if (this.peerManager) this.peerManager.destroy();
+    
+    // Stop microphone health check
+    this.stopMicrophoneHealthCheck();
+    
     this.unbindRoomParticipantEvents();
     if (this.root) this.root.innerHTML = '';
     this.root = null;
@@ -927,8 +939,33 @@ export class RoomView {
       if (result.success) {
         console.log('✅ Video streaming started successfully');
         
+        // CRITICAL: Verify microphone tracks are still active after video streaming
+        setTimeout(async () => {
+          try {
+            const trackStatus = this.peerManager.getTrackStatus();
+            console.log('🔍 Track status after video streaming:', trackStatus);
+            
+            // Check if host microphone is still active
+            if (this.isHost) {
+              const hostPeerId = this.getHostPeerId();
+              if (hostPeerId && trackStatus.peers[hostPeerId]) {
+                const hostStatus = trackStatus.peers[hostPeerId];
+                if (!hostStatus.hasMicrophone) {
+                  console.warn('⚠️ Host microphone track missing after video streaming - attempting recovery');
+                  await this.peerManager.ensureMicrophoneTracks();
+                }
+              }
+            }
+          } catch (error) {
+            console.error('❌ Error checking track status:', error);
+          }
+        }, 1000);
+        
         // Show streaming status in UI
         this.showVideoStreamingStatus(true);
+        
+        // CRITICAL: Start periodic microphone track health check during video streaming
+        this.startMicrophoneHealthCheck();
         
         // Notify participants
         this.showTemporaryMessage('🎥 Video streaming to participants started!', 'success');
@@ -959,6 +996,9 @@ export class RoomView {
    */
   async stopVideoStreaming() {
     try {
+      // Stop microphone health check
+      this.stopMicrophoneHealthCheck();
+      
       await this.peerManager.stopVideoStreaming();
       this.showVideoStreamingStatus(false);
       console.log('🎥 Video streaming stopped');
@@ -1734,6 +1774,102 @@ export class RoomView {
     }
 
     console.log('✅ RoomView cleanup complete');
+  }
+
+  /**
+   * Start periodic microphone track health check during video streaming
+   * This prevents the host's voice from disappearing
+   */
+  startMicrophoneHealthCheck() {
+    if (this.microphoneHealthCheckInterval) {
+      clearInterval(this.microphoneHealthCheckInterval);
+    }
+    
+    this.microphoneHealthCheckInterval = setInterval(async () => {
+      try {
+        if (!this.isHost || !this.peerManager) return;
+        
+        const trackStatus = this.peerManager.getTrackStatus();
+        const hostPeerId = this.getHostPeerId();
+        
+        if (hostPeerId && trackStatus.peers[hostPeerId]) {
+          const hostStatus = trackStatus.peers[hostPeerId];
+          
+          // Check if microphone track is missing or invalid
+          if (!hostStatus.hasMicrophone || hostStatus.audioSenders === 0) {
+            console.warn('⚠️ Host microphone track health check failed - attempting recovery');
+            await this.peerManager.ensureMicrophoneTracks();
+            
+            // Log recovery attempt
+            const newStatus = this.peerManager.getTrackStatus();
+            if (newStatus.peers[hostPeerId]?.hasMicrophone) {
+              console.log('✅ Host microphone track recovered successfully');
+            } else {
+              console.error('❌ Failed to recover host microphone track');
+            }
+          }
+        }
+      } catch (error) {
+        console.error('❌ Error in microphone health check:', error);
+      }
+    }, 5000); // Check every 5 seconds
+    
+    console.log('🔍 Microphone health check started');
+  }
+
+  /**
+   * Stop microphone health check
+   */
+  stopMicrophoneHealthCheck() {
+    if (this.microphoneHealthCheckInterval) {
+      clearInterval(this.microphoneHealthCheckInterval);
+      this.microphoneHealthCheckInterval = null;
+      console.log('🔍 Microphone health check stopped');
+    }
+  }
+
+  /**
+   * Manually verify and fix microphone tracks (for debugging/testing)
+   */
+  async verifyMicrophoneTracks() {
+    if (!this.isHost || !this.peerManager) {
+      console.warn('⚠️ Cannot verify microphone tracks: not host or no peer manager');
+      return;
+    }
+    
+    try {
+      console.log('🔍 Manually verifying microphone tracks...');
+      
+      const trackStatus = this.peerManager.getTrackStatus();
+      console.log('📊 Current track status:', trackStatus);
+      
+      // Check if microphone tracks are missing
+      const hostPeerId = this.getHostPeerId();
+      if (hostPeerId && trackStatus.peers[hostPeerId]) {
+        const hostStatus = trackStatus.peers[hostPeerId];
+        
+        if (!hostStatus.hasMicrophone || hostStatus.audioSenders === 0) {
+          console.warn('⚠️ Microphone tracks missing - attempting recovery...');
+          await this.peerManager.ensureMicrophoneTracks();
+          
+          // Verify recovery
+          const newStatus = this.peerManager.getTrackStatus();
+          if (newStatus.peers[hostPeerId]?.hasMicrophone) {
+            console.log('✅ Microphone tracks recovered successfully');
+            this.showTemporaryMessage('🎙️ Microphone tracks recovered!', 'success');
+          } else {
+            console.error('❌ Failed to recover microphone tracks');
+            this.showTemporaryMessage('❌ Failed to recover microphone tracks', 'error');
+          }
+        } else {
+          console.log('✅ Microphone tracks are healthy');
+          this.showTemporaryMessage('🎙️ Microphone tracks are healthy', 'success');
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error verifying microphone tracks:', error);
+      this.showTemporaryMessage('❌ Error verifying microphone tracks', 'error');
+    }
   }
 
   /**
