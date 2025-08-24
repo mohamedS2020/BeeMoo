@@ -18,13 +18,8 @@ export class PeerManager {
     this.videoQuality = 'high';
     this.connectionQuality = new Map(); // peerId -> quality metrics
     
-    // CRITICAL: Flag to prevent track replacement during critical operations
-    this.isPerformingCriticalOperation = false;
-    
-    // Track senders separately to maintain control
-    this.microphoneSenders = new Map(); // peerId -> RTCRtpSender for mic audio
-    this.videoSenders = new Map(); // peerId -> RTCRtpSender for video
-    this.videoAudioSenders = new Map(); // peerId -> RTCRtpSender for video audio
+    // SIMPLE: Keep track of what we've added to each peer
+    this.peerTracks = new Map(); // peerId -> { mic: sender, video: sender, videoAudio: sender }
 
     // Bind signaling events
     this.signaling.onOffer(async ({ from, sdp }) => {
@@ -134,7 +129,7 @@ export class PeerManager {
         const sender = pc.addTrack(track, local);
         // Store microphone sender reference
         if (track.kind === 'audio') {
-          this.microphoneSenders.set(peerId, sender);
+          this.peerTracks.set(peerId, { ...this.peerTracks.get(peerId), mic: sender });
         }
       });
     } else {
@@ -146,8 +141,7 @@ export class PeerManager {
       // Add video tracks
       this.currentVideoStream.getVideoTracks().forEach(track => {
         const sender = pc.addTrack(track, this.currentVideoStream);
-        this.videoSenders.set(peerId, sender);
-        this.configureVideoSender(sender, peerId);
+        this.peerTracks.set(peerId, { ...this.peerTracks.get(peerId), video: sender });
       });
       
       // Add video audio tracks with label
@@ -159,7 +153,7 @@ export class PeerManager {
           writable: false
         });
         const sender = pc.addTrack(clonedTrack, this.currentVideoStream);
-        this.videoAudioSenders.set(peerId, sender);
+        this.peerTracks.set(peerId, { ...this.peerTracks.get(peerId), videoAudio: sender });
       });
     }
 
@@ -212,73 +206,13 @@ export class PeerManager {
       pc.close();
       this.peerIdToPc.delete(peerId);
       // Clean up sender references
-      this.microphoneSenders.delete(peerId);
-      this.videoSenders.delete(peerId);
-      this.videoAudioSenders.delete(peerId);
-    }
-  }
-
-  async replaceLocalStream(newStream) {
-    // CRITICAL FIX: Don't replace tracks unnecessarily - this can cause audio instability
-    // Instead, only replace if the stream is actually different or if there are no existing tracks
-    
-    if (!newStream || !newStream.getAudioTracks().length) {
-      console.warn('⚠️ Invalid new stream provided to replaceLocalStream');
-      return;
-    }
-    
-    // CRITICAL: Prevent track replacement during critical operations like video streaming
-    if (this.isPerformingCriticalOperation) {
-      console.warn('⚠️ Cannot replace local stream during critical operation (video streaming)');
-      return;
-    }
-    
-    const newTrack = newStream.getAudioTracks()[0];
-    
-    // Check if we actually need to replace anything
-    if (this.currentLocalStream && 
-        this.currentLocalStream.getAudioTracks().length > 0 &&
-        this.currentLocalStream.getAudioTracks()[0].id === newTrack.id) {
-      console.log('🎙️ Stream is the same, no replacement needed');
-      return;
-    }
-    
-    console.log('🎙️ Replacing local stream with new audio track:', {
-      oldStreamId: this.currentLocalStream?.id,
-      newStreamId: newStream.id,
-      oldTrackId: this.currentLocalStream?.getAudioTracks()[0]?.id,
-      newTrackId: newTrack.id
-    });
-    
-    this.currentLocalStream = newStream;
-    
-    // Instead of using replaceTrack (which can cause audio issues),
-    // remove the old track and add the new one
-    for (const [peerId, sender] of this.microphoneSenders.entries()) {
-      try {
-        const pc = this.peerIdToPc.get(peerId);
-        if (!pc) continue;
-        
-        // Remove the old track
-        pc.removeTrack(sender);
-        
-        // Add the new track
-        const newSender = pc.addTrack(newTrack, newStream);
-        this.microphoneSenders.set(peerId, newSender);
-        
-        console.log(`🎙️ Replaced microphone track for peer ${peerId} using remove/add method`);
-        
-        // Renegotiate to apply the change
-        await this.renegotiatePeer(peerId);
-        
-      } catch (error) {
-        console.error(`❌ Failed to replace audio track for peer ${peerId}:`, error);
-      }
+      this.peerTracks.delete(peerId);
     }
   }
 
   /**
    * Start video streaming from host to all participants
+   * SIMPLE: Just add video tracks without touching microphone tracks
    */
   async startVideoStreaming(videoElement, options = {}) {
     try {
@@ -286,80 +220,35 @@ export class PeerManager {
         throw new Error('Only hosts can start video streaming');
       }
 
-      // CRITICAL: Set flag to prevent track replacement during video streaming
-      this.isPerformingCriticalOperation = true;
-      console.log('🔒 Critical operation flag set - preventing track replacement');
-
       if (!videoElement || typeof videoElement.captureStream !== 'function') {
         const errorMessage = 'Video element does not support captureStream';
         console.error(`❌ ${errorMessage}`);
-        this.isPerformingCriticalOperation = false; // Reset flag on error
         return { success: false, error: errorMessage };
       }
 
       // Create video stream from video element
       const result = WebRTCUtils.createVideoStreamFromElement(videoElement, options);
       if (!result.success) {
-        // The result object already contains the error, so just return it
         console.error(`❌ Failed to create video stream: ${result.error?.message}`);
-        this.isPerformingCriticalOperation = false; // Reset flag on error
         return { success: false, error: `Failed to create video stream: ${result.error?.message}` };
       }
 
       this.currentVideoStream = result.stream;
       console.log('🎥 Video streaming started successfully');
 
-      // Add video and audio tracks to all existing peer connections
+      // SIMPLE: Just add video tracks to existing peer connections
+      // Don't touch microphone tracks at all - keep them separate
       for (const [peerId, pc] of this.peerIdToPc.entries()) {
-        // CRITICAL FIX: Always ensure microphone track is present and active
-        // The previous logic was flawed - we need to maintain the microphone track
-        if (this.currentLocalStream) {
-          const micTracks = this.currentLocalStream.getAudioTracks();
-          for (const track of micTracks) {
-            // Check if we already have a microphone sender for this peer
-            if (!this.microphoneSenders.has(peerId)) {
-              // Add new microphone track
-              const sender = pc.addTrack(track, this.currentLocalStream);
-              this.microphoneSenders.set(peerId, sender);
-              console.log(`🎙️ Added microphone track to peer ${peerId}`);
-            } else {
-              // CRITICAL: Only replace if the track is actually invalid
-              // Don't replace tracks unnecessarily as this can cause audio issues
-              const existingSender = this.microphoneSenders.get(peerId);
-              const existingTrack = existingSender.track;
-              
-              // Check if the existing track is truly invalid
-              const isTrackInvalid = !existingTrack || 
-                                   existingTrack.readyState === 'ended' || 
-                                   existingTrack.readyState === 'failed';
-              
-              if (isTrackInvalid) {
-                console.log(`🎙️ Existing microphone track for peer ${peerId} is invalid (${existingTrack?.readyState}), replacing...`);
-                try { 
-                  pc.removeTrack(existingSender); 
-                } catch (e) {
-                  console.warn(`⚠️ Error removing invalid track:`, e);
-                }
-                const sender = pc.addTrack(track, this.currentLocalStream);
-                this.microphoneSenders.set(peerId, sender);
-                console.log(`🎙️ Replaced invalid microphone track for peer ${peerId}`);
-              } else {
-                // Track is valid - don't touch it
-                console.log(`🎙️ Microphone track for peer ${peerId} is already valid (${existingTrack.readyState})`);
-              }
-            }
-          }
-        }
+        console.log(`🎥 Adding video tracks to peer ${peerId}`);
         
         // Add video tracks
         for (const track of this.currentVideoStream.getVideoTracks()) {
           const sender = pc.addTrack(track, this.currentVideoStream);
-          this.videoSenders.set(peerId, sender);
-          this.configureVideoSender(sender, peerId);
+          this.peerTracks.set(peerId, { ...this.peerTracks.get(peerId), video: sender });
           console.log(`🎥 Added video track to peer ${peerId}`);
         }
         
-        // Add audio tracks from video stream (movie audio) with label
+        // Add video audio tracks (movie audio) with label
         for (const track of this.currentVideoStream.getAudioTracks()) {
           // Clone the track and set a label to distinguish it from mic audio
           const clonedTrack = track.clone();
@@ -368,69 +257,63 @@ export class PeerManager {
             writable: false
           });
           const sender = pc.addTrack(clonedTrack, this.currentVideoStream);
-          this.videoAudioSenders.set(peerId, sender);
-          console.log(`🔊 Added video audio track to peer ${peerId}:`, {
-            id: clonedTrack.id,
-            label: clonedTrack.label,
-            enabled: clonedTrack.enabled
-          });
+          this.peerTracks.set(peerId, { ...this.peerTracks.get(peerId), videoAudio: sender });
+          console.log(`🔊 Added video audio track to peer ${peerId}`);
         }
         
-        // Verify all tracks are present
-        const senders = pc.getSenders();
-        const audioSenders = senders.filter(s => s.track && s.track.kind === 'audio');
-        const videoSenderCount = senders.filter(s => s.track && s.track.kind === 'video').length;
-        
-        console.log(`📊 Peer ${peerId} track summary after video streaming:`, {
-          totalSenders: senders.length,
-          audioSenders: audioSenders.length,
-          videoSenders: videoSenderCount,
-          hasMicrophone: this.microphoneSenders.has(peerId),
-          hasVideoAudio: this.videoAudioSenders.has(peerId),
-          hasVideo: this.videoSenders.has(peerId)
+        // Log what we have
+        const peerTrackInfo = this.peerTracks.get(peerId) || {};
+        console.log(`📊 Peer ${peerId} tracks:`, {
+          hasMic: !!peerTrackInfo.mic,
+          hasVideo: !!peerTrackInfo.video,
+          hasVideoAudio: !!peerTrackInfo.videoAudio
         });
         
-        // Renegotiate connection to include video and audio
+        // Renegotiate to include video tracks
         await this.renegotiatePeer(peerId);
       }
 
-      // CRITICAL: Ensure microphone tracks are maintained after video streaming
-      await this.ensureMicrophoneTracks();
-
-      this.isPerformingCriticalOperation = false; // Reset flag after successful operation
       return { success: true, stream: this.currentVideoStream };
       
     } catch (error) {
       console.error('❌ Failed to start video streaming:', error);
-      this.isPerformingCriticalOperation = false; // Reset flag on error
       return { success: false, error: error.message };
     }
   }
 
   /**
    * Stop video streaming
+   * SIMPLE: Just remove video tracks, leave microphone tracks alone
    */
   async stopVideoStreaming() {
     if (!this.currentVideoStream) return;
 
     try {
-      // Remove only video-related tracks from all peer connections
+      console.log('🎥 Stopping video streaming...');
+      
+      // SIMPLE: Remove only video-related tracks from all peer connections
+      // Don't touch microphone tracks at all
       for (const [peerId, pc] of this.peerIdToPc.entries()) {
+        const peerTrackInfo = this.peerTracks.get(peerId) || {};
+        
         // Remove video senders
-        const videoSender = this.videoSenders.get(peerId);
-        if (videoSender) {
-          pc.removeTrack(videoSender);
-          this.videoSenders.delete(peerId);
+        if (peerTrackInfo.video) {
+          pc.removeTrack(peerTrackInfo.video);
+          console.log(`🎥 Removed video track from peer ${peerId}`);
         }
         
         // Remove video audio senders
-        const videoAudioSender = this.videoAudioSenders.get(peerId);
-        if (videoAudioSender) {
-          pc.removeTrack(videoAudioSender);
-          this.videoAudioSenders.delete(peerId);
+        if (peerTrackInfo.videoAudio) {
+          pc.removeTrack(peerTrackInfo.videoAudio);
+          console.log(`🔊 Removed video audio track from peer ${peerId}`);
         }
         
-        console.log(`🎥 Removed video and video audio tracks from peer ${peerId}`);
+        // Update peer tracks info
+        this.peerTracks.set(peerId, {
+          ...peerTrackInfo,
+          video: undefined,
+          videoAudio: undefined
+        });
       }
 
       // Stop video stream tracks
@@ -442,17 +325,11 @@ export class PeerManager {
         await this.renegotiatePeer(peerId);
       }
 
-      // CRITICAL: Reset flag to allow track replacement again
-      this.isPerformingCriticalOperation = false;
-      console.log('🔓 Critical operation flag reset - track replacement allowed');
-
       console.log('🎥 Video streaming stopped');
       return { success: true };
       
     } catch (error) {
       console.error('❌ Failed to stop video streaming:', error);
-      // Reset flag even on error
-      this.isPerformingCriticalOperation = false;
       return { success: false, error: error.message };
     }
   }
@@ -469,162 +346,99 @@ export class PeerManager {
    * Configure video sender with quality parameters
    */
   async configureVideoSender(sender, peerId) {
-    if (!sender || !sender.track || sender.track.kind !== 'video') return;
-
     try {
       const params = sender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) {
-        params.encodings = [{}];
+      if (!params.encodings) return;
+
+      // Apply quality settings
+      const encoding = params.encodings[0];
+      if (encoding) {
+        encoding.maxBitrate = this.getMaxBitrate();
+        encoding.scaleResolutionDownBy = this.getScaleFactor();
+        encoding.degradationPreference = 'maintain-resolution';
+        
+        await sender.setParameters(params);
+        console.log(`🎥 Configured video sender for peer ${peerId}:`, {
+          maxBitrate: encoding.maxBitrate,
+          scaleResolutionDownBy: encoding.scaleResolutionDownBy,
+          degradationPreference: encoding.degradationPreference
+        });
       }
-
-      // Get connection quality for this peer
-      const quality = this.getConnectionQuality(peerId);
-      const encodingParams = WebRTCUtils.getVideoEncodingParams(this.videoQuality, quality);
-
-      // Apply encoding parameters
-      params.encodings[0].maxBitrate = encodingParams.maxBitrate;
-      params.encodings[0].scaleResolutionDownBy = encodingParams.scaleResolutionDownBy;
-      
-      if (encodingParams.degradationPreference) {
-        params.degradationPreference = encodingParams.degradationPreference;
-      }
-
-      await sender.setParameters(params);
-      console.log(`🎥 Configured video sender for peer ${peerId}:`, encodingParams);
-      
     } catch (error) {
       console.warn(`⚠️ Failed to configure video sender for peer ${peerId}:`, error);
     }
   }
 
   /**
+   * Get max bitrate based on quality setting
+   */
+  getMaxBitrate() {
+    const bitrates = {
+      low: 500000,
+      medium: 1000000,
+      high: 2500000,
+      ultra: 4000000
+    };
+    return bitrates[this.videoQuality] || bitrates.high;
+  }
+
+  /**
+   * Get scale factor based on quality setting
+   */
+  getScaleFactor() {
+    const factors = {
+      low: 4,
+      medium: 2,
+      high: 1,
+      ultra: 1
+    };
+    return factors[this.videoQuality] || factors.high;
+  }
+
+  /**
+   * Get connection quality metrics for a peer
+   */
+  getConnectionQuality(peerId) {
+    return this.connectionQuality.get(peerId) || { speed: 'fast', latency: 0 };
+  }
+
+  /**
    * Update connection quality metrics
    */
   updateConnectionQuality(peerId, pc) {
-    if (!pc) return;
-
-    pc.getStats().then(stats => {
-      let quality = 'fast'; // default
-      let rtt = 0;
-      let packetLoss = 0;
-
-      stats.forEach(report => {
-        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-          rtt = report.currentRoundTripTime * 1000; // Convert to ms
-        }
-        if (report.type === 'inbound-rtp' && report.kind === 'video') {
-          packetLoss = report.packetsLost || 0;
-        }
-      });
-
-      // Determine quality based on RTT and packet loss
-      if (rtt > 500 || packetLoss > 5) {
-        quality = 'slow';
-      } else if (rtt > 200 || packetLoss > 2) {
-        quality = 'medium';
-      } else if (rtt < 100) {
-        quality = 'excellent';
-      }
-
-      this.connectionQuality.set(peerId, quality);
-      
-      // Reconfigure video sender if quality changed significantly
-      this.adaptVideoQuality(peerId, quality);
-    }).catch(err => {
-      console.warn(`⚠️ Failed to get stats for peer ${peerId}:`, err);
-    });
-  }
-
-  /**
-   * Adapt video quality based on connection
-   */
-  async adaptVideoQuality(peerId, quality) {
-    const pc = this.peerIdToPc.get(peerId);
-    if (!pc || !this.isHost) return;
-
-    const videoSender = this.videoSenders.get(peerId);
-    if (videoSender) {
-      await this.configureVideoSender(videoSender, peerId);
+    const quality = {
+      speed: 'fast',
+      latency: 0,
+      iceState: pc.iceConnectionState,
+      connectionState: pc.connectionState
+    };
+    
+    // Simple quality assessment
+    if (pc.iceConnectionState === 'connected' && pc.connectionState === 'connected') {
+      quality.speed = 'fast';
+    } else if (pc.iceConnectionState === 'checking') {
+      quality.speed = 'medium';
+    } else {
+      quality.speed = 'slow';
     }
+    
+    this.connectionQuality.set(peerId, quality);
   }
 
   /**
-   * Get connection quality for a peer
+   * Restart connection to a peer
    */
-  getConnectionQuality(peerId) {
-    return this.connectionQuality.get(peerId) || 'fast';
-  }
-
-  /**
-   * Renegotiate peer connection (for adding/removing tracks)
-   */
-  async renegotiatePeer(peerId) {
-    const pc = this.peerIdToPc.get(peerId);
-    if (!pc) return;
-
+  async restartConnection(peerId) {
     try {
-      // CRITICAL FIX: Before renegotiating, ensure all tracks are properly attached
-      // This prevents the microphone track from being lost during renegotiation
-      
-      // Verify microphone track is still attached
-      if (this.currentLocalStream && this.microphoneSenders.has(peerId)) {
-        const micSender = this.microphoneSenders.get(peerId);
-        const micTrack = this.currentLocalStream.getAudioTracks()[0];
-        
-        // CRITICAL: Only replace if the track is truly invalid
-        // Don't replace tracks unnecessarily as this can cause audio issues
-        const existingTrack = micSender.track;
-        const isTrackInvalid = !existingTrack || 
-                             existingTrack.readyState === 'ended' || 
-                             existingTrack.readyState === 'failed';
-        
-        if (micTrack && isTrackInvalid) {
-          console.log(`🎙️ Re-attaching microphone track for peer ${peerId} before renegotiation (track was ${existingTrack?.readyState})`);
-          try { pc.removeTrack(micSender); } catch {}
-          const newSender = pc.addTrack(micTrack, this.currentLocalStream);
-          this.microphoneSenders.set(peerId, newSender);
-        } else if (micTrack && existingTrack) {
-          console.log(`🎙️ Microphone track for peer ${peerId} is valid (${existingTrack.readyState}), no replacement needed`);
-        }
-      }
-      
-      // Verify video tracks are still attached
-      if (this.currentVideoStream && this.videoSenders.has(peerId)) {
-        const videoSender = this.videoSenders.get(peerId);
-        const videoTrack = this.currentVideoStream.getVideoTracks()[0];
-        
-        if (videoTrack && (!videoSender.track || videoSender.track.readyState !== 'live')) {
-          console.log(`🎥 Re-attaching video track for peer ${peerId} before renegotiation`);
-          try { pc.removeTrack(videoSender); } catch {}
-          const newSender = pc.addTrack(videoTrack, this.currentVideoStream);
-          this.videoSenders.set(peerId, newSender);
-        }
-      }
-      
-      // Verify video audio tracks are still attached
-      if (this.currentVideoStream && this.videoAudioSenders.has(peerId)) {
-        const videoAudioSender = this.videoAudioSenders.get(peerId);
-        const videoAudioTrack = this.currentVideoStream.getAudioTracks()[0];
-        
-        if (videoAudioTrack && (!videoAudioSender.track || videoAudioSender.track.readyState !== 'live')) {
-          console.log(`🔊 Re-attaching video audio track for peer ${peerId} before renegotiation`);
-          try { pc.removeTrack(videoAudioSender); } catch {}
-          const clonedTrack = videoAudioTrack.clone();
-          Object.defineProperty(clonedTrack, 'label', {
-            value: 'video-audio',
-            writable: false
-          });
-          const newSender = pc.addTrack(clonedTrack, this.currentVideoStream);
-          this.videoAudioSenders.set(peerId, newSender);
-        }
-      }
-
-      console.log(`🔄 Renegotiating peer ${peerId} with ${pc.getSenders().length} senders`);
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      this.signaling.sendOffer(offer, peerId);
+      console.log(`🔄 Restarting connection to peer ${peerId}`);
+      // Close existing connection
+      this.closePeer(peerId);
+      // Wait a moment before reconnecting
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Recreate connection
+      await this.callPeer(peerId);
     } catch (error) {
-      console.error(`❌ Failed to renegotiate peer ${peerId}:`, error);
+      console.error(`❌ Failed to restart connection to peer ${peerId}:`, error);
     }
   }
 
@@ -634,13 +448,6 @@ export class PeerManager {
   setVideoQuality(quality) {
     this.videoQuality = quality;
     console.log(`🎥 Video quality set to: ${quality}`);
-
-    // Update all existing video senders
-    if (this.isHost) {
-      for (const peerId of this.peerIdToPc.keys()) {
-        this.adaptVideoQuality(peerId, this.getConnectionQuality(peerId));
-      }
-    }
   }
 
   /**
@@ -674,119 +481,34 @@ export class PeerManager {
     }
   }
 
-  async restartConnection(peerId) {
+  /**
+   * Renegotiate peer connection (for adding/removing tracks)
+   * SIMPLE: Just renegotiate, don't touch existing tracks
+   */
+  async renegotiatePeer(peerId) {
+    const pc = this.peerIdToPc.get(peerId);
+    if (!pc) return;
+
     try {
-      console.log(`🔄 Restarting connection to peer ${peerId}`);
-      // Close existing connection
-      this.closePeer(peerId);
-      // Wait a moment before reconnecting
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      // Recreate connection
-      await this.callPeer(peerId);
+      console.log(`🔄 Renegotiating peer ${peerId}`);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      this.signaling.sendOffer(offer, peerId);
     } catch (error) {
-      console.error(`❌ Failed to restart connection to peer ${peerId}:`, error);
+      console.error(`❌ Failed to renegotiate peer ${peerId}:`, error);
     }
   }
 
+  /**
+   * Ensure local stream is available
+   */
   async ensureLocalStream() {
     return await this._getOrCreateLocalStream();
   }
 
   /**
-   * Ensure microphone track is always maintained for all peers
-   * This is critical to prevent the host's voice from disappearing
+   * Destroy all connections and clean up
    */
-  async ensureMicrophoneTracks() {
-    if (!this.currentLocalStream) {
-      console.warn('⚠️ No local stream available for microphone tracks');
-      return;
-    }
-
-    const micTracks = this.currentLocalStream.getAudioTracks();
-    if (micTracks.length === 0) {
-      console.warn('⚠️ No microphone tracks in local stream');
-      return;
-    }
-
-    console.log(`🎙️ Ensuring microphone tracks for ${this.peerIdToPc.size} peers`);
-    
-    for (const [peerId, pc] of this.peerIdToPc.entries()) {
-      const micTrack = micTracks[0]; // Use first microphone track
-      
-      if (!this.microphoneSenders.has(peerId)) {
-        // Add microphone track if not present
-        const sender = pc.addTrack(micTrack, this.currentLocalStream);
-        this.microphoneSenders.set(peerId, sender);
-        console.log(`🎙️ Added missing microphone track for peer ${peerId}`);
-      } else {
-        // CRITICAL: Only replace if the track is truly invalid
-        // Don't replace tracks unnecessarily as this can cause audio issues
-        const existingSender = this.microphoneSenders.get(peerId);
-        const existingTrack = existingSender.track;
-        
-        // Check if the existing track is truly invalid
-        const isTrackInvalid = !existingTrack || 
-                             existingTrack.readyState === 'ended' || 
-                             existingTrack.readyState === 'failed';
-        
-        if (isTrackInvalid) {
-          console.log(`🎙️ Microphone track for peer ${peerId} is invalid (${existingTrack?.readyState}), replacing...`);
-          try { 
-            pc.removeTrack(existingSender); 
-          } catch (e) {
-            console.warn(`⚠️ Error removing invalid track:`, e);
-          }
-          const sender = pc.addTrack(micTrack, this.currentLocalStream);
-          this.microphoneSenders.set(peerId, sender);
-          console.log(`🎙️ Replaced invalid microphone track for peer ${peerId}`);
-        } else {
-          // Track is valid - don't touch it
-          console.log(`🎙️ Microphone track for peer ${peerId} is already valid (${existingTrack.readyState})`);
-        }
-      }
-    }
-  }
-
-  /**
-   * Get detailed status of all tracks for debugging
-   */
-  getTrackStatus() {
-    const status = {
-      localStream: this.currentLocalStream ? {
-        hasAudio: this.currentLocalStream.getAudioTracks().length > 0,
-        audioTracks: this.currentLocalStream.getAudioTracks().map(t => ({
-          id: t.id,
-          enabled: t.enabled,
-          readyState: t.readyState,
-          muted: t.muted
-        }))
-      } : null,
-      videoStream: this.currentVideoStream ? {
-        hasVideo: this.currentVideoStream.getVideoTracks().length > 0,
-        hasAudio: this.currentVideoStream.getAudioTracks().length > 0,
-        videoTracks: this.currentVideoStream.getVideoTracks().length,
-        audioTracks: this.currentVideoStream.getAudioTracks().length
-      } : null,
-      peers: {}
-    };
-
-    for (const [peerId, pc] of this.peerIdToPc.entries()) {
-      const senders = pc.getSenders();
-      status.peers[peerId] = {
-        totalSenders: senders.length,
-        audioSenders: senders.filter(s => s.track && s.track.kind === 'audio').length,
-        videoSenders: senders.filter(s => s.track && s.track.kind === 'video').length,
-        hasMicrophone: this.microphoneSenders.has(peerId),
-        hasVideo: this.videoSenders.has(peerId),
-        hasVideoAudio: this.videoAudioSenders.has(peerId),
-        connectionState: pc.connectionState,
-        iceConnectionState: pc.iceConnectionState
-      };
-    }
-
-    return status;
-  }
-
   destroy() {
     // Stop video streaming if active
     if (this.currentVideoStream) {
@@ -802,10 +524,6 @@ export class PeerManager {
     // Clean up
     this.signaling.offAll();
     this.connectionQuality.clear();
-    this.microphoneSenders.clear();
-    this.videoSenders.clear();
-    this.videoAudioSenders.clear();
-    
-    console.log('🎥 PeerManager destroyed');
+    this.peerTracks.clear();
   }
 }

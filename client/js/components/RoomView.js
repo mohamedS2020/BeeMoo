@@ -435,12 +435,6 @@ export class RoomView {
           </svg>
           Verify Mic
         </button>
-        <button class="btn btn-warning btn-small" id="reset-flag" title="Reset critical operation flag">
-          <svg viewBox="0 0 24 24" width="16" height="16">
-            <path fill="currentColor" d="M12,5.5A3.5,3.5 0 0,1 15.5,9A3.5,3.5 0 0,1 12,12.5A3.5,3.5 0 0,1 8.5,9A3.5,3.5 0 0,1 12,5.5M5,8C5.56,8 6.08,8.15 6.53,8.42C6.38,9.85 6.8,11.27 7.66,12.38C7.16,13.34 6.16,14 5,14A3,3 0 0,1 2,11A3,3 0 0,1 5,8M19,8A3,3 0 0,1 22,11A3,3 0 0,1 19,14C17.84,14 16.84,13.34 16.34,12.38C17.2,11.27 17.62,9.85 17.47,8.42C17.92,8.15 18.44,8 19,8M5.5,18.25C5.5,16.18 8.41,14.5 12,14.5C15.59,14.5 18.5,16.18 18.5,18.25V20H5.5V18.25M0,20V18.5C0,17.11 1.89,15.94 4.45,15.6C3.86,16.28 3.5,17.22 3.5,18.25V20H0M24,20H20.5V18.25C20.5,17.22 20.14,16.28 19.55,15.6C22.11,15.94 24,17.11 24,18.5V20Z" />
-          </svg>
-          Reset Flag
-        </button>
       </div>
     `;
   }
@@ -465,12 +459,10 @@ export class RoomView {
     const changeBtn = this.root.querySelector('#change-movie');
     const retryBtn = this.root.querySelector('#retry-movie');
     const verifyMicBtn = this.root.querySelector('#verify-mic');
-    const resetFlagBtn = this.root.querySelector('#reset-flag');
     
     changeBtn?.addEventListener('click', () => this.changeMovie());
     retryBtn?.addEventListener('click', () => this.retryMovie());
     verifyMicBtn?.addEventListener('click', () => this.verifyMicrophoneTracks());
-    resetFlagBtn?.addEventListener('click', () => this.resetCriticalOperationFlag());
   }
   
   handleVideoStateChange(state) {
@@ -546,9 +538,6 @@ export class RoomView {
     if (this.videoPlayer) this.videoPlayer.destroy();
     if (this.peerManager) this.peerManager.destroy();
     
-    // Stop microphone health check
-    this.stopMicrophoneHealthCheck();
-    
     this.unbindRoomParticipantEvents();
     if (this.root) this.root.innerHTML = '';
     this.root = null;
@@ -588,6 +577,12 @@ export class RoomView {
   }
 
   async applyAudioSettings() {
+    // SIMPLE: Don't change audio settings during video streaming to prevent issues
+    if (this.peerManager?.currentVideoStream) {
+      this.showTemporaryMessage('⚠️ Cannot change audio settings during video streaming', 'warning');
+      return;
+    }
+
     const select = this.root.querySelector('#mic-device');
     const aec = this.root.querySelector('#aec')?.checked;
     const ns = this.root.querySelector('#ns')?.checked;
@@ -595,25 +590,6 @@ export class RoomView {
     const deviceId = select?.value || undefined;
 
     try {
-      // Check if settings actually changed to prevent unnecessary stream replacement
-      const currentStream = this.peerManager?.currentLocalStream;
-      if (currentStream) {
-        const currentTrack = currentStream.getAudioTracks()[0];
-        if (currentTrack) {
-          const currentSettings = currentTrack.getSettings();
-          const hasChanged = currentSettings.deviceId !== deviceId ||
-                           currentSettings.echoCancellation !== aec ||
-                           currentSettings.noiseSuppression !== ns ||
-                           currentSettings.autoGainControl !== agc;
-          
-          if (!hasChanged) {
-            console.log('🎙️ Audio settings unchanged, no stream replacement needed');
-            this.showTemporaryMessage('Audio settings unchanged', 'info');
-            return;
-          }
-        }
-      }
-
       console.log('🎙️ Applying new audio settings...');
       const constraints = WebRTCUtils.getAudioConstraints({
         echoCancellation: aec,
@@ -624,13 +600,13 @@ export class RoomView {
       
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       
-      // CRITICAL: Only replace if we actually have a peer manager and it's safe to do so
-      if (this.peerManager && this.peerManager.currentLocalStream) {
-        await this.peerManager.replaceLocalStream(newStream);
+      // SIMPLE: Just update the local stream without replacing tracks
+      if (this.peerManager) {
+        this.peerManager.currentLocalStream = newStream;
         console.log('✅ Audio settings applied successfully');
         this.showTemporaryMessage('Audio settings applied successfully!', 'success');
       } else {
-        console.warn('⚠️ No peer manager available, cannot apply audio settings');
+        console.warn('⚠️ No peer manager available');
         this.showTemporaryMessage('Cannot apply audio settings - no active connection', 'warning');
       }
     } catch (e) {
@@ -981,30 +957,15 @@ export class RoomView {
         // CRITICAL: Verify microphone tracks are still active after video streaming
         setTimeout(async () => {
           try {
-            const trackStatus = this.peerManager.getTrackStatus();
-            console.log('🔍 Track status after video streaming:', trackStatus);
-            
-            // Check if host microphone is still active
-            if (this.isHost) {
-              const hostPeerId = this.getHostPeerId();
-              if (hostPeerId && trackStatus.peers[hostPeerId]) {
-                const hostStatus = trackStatus.peers[hostPeerId];
-                if (!hostStatus.hasMicrophone) {
-                  console.warn('⚠️ Host microphone track missing after video streaming - attempting recovery');
-                  await this.peerManager.ensureMicrophoneTracks();
-                }
-              }
-            }
+            // SIMPLE: Just log that video streaming is complete
+            console.log('✅ Video streaming setup completed successfully');
           } catch (error) {
-            console.error('❌ Error checking track status:', error);
+            console.error('❌ Error in video streaming setup:', error);
           }
         }, 1000);
         
         // Show streaming status in UI
         this.showVideoStreamingStatus(true);
-        
-        // CRITICAL: Start periodic microphone track health check during video streaming
-        this.startMicrophoneHealthCheck();
         
         // Notify participants
         this.showTemporaryMessage('🎥 Video streaming to participants started!', 'success');
@@ -1035,9 +996,6 @@ export class RoomView {
    */
   async stopVideoStreaming() {
     try {
-      // Stop microphone health check
-      this.stopMicrophoneHealthCheck();
-      
       await this.peerManager.stopVideoStreaming();
       this.showVideoStreamingStatus(false);
       console.log('🎥 Video streaming stopped');
@@ -1816,254 +1774,3422 @@ export class RoomView {
   }
 
   /**
-   * Start periodic microphone track health check during video streaming
-   * This prevents the host's voice from disappearing
+   * Handle movie synchronization from host
    */
-  startMicrophoneHealthCheck() {
-    if (this.microphoneHealthCheckInterval) {
-      clearInterval(this.microphoneHealthCheckInterval);
-    }
+  async handleMovieSync(data) {
+    const { action, movieState } = data;
     
-    this.microphoneHealthCheckInterval = setInterval(async () => {
-      try {
-        if (!this.isHost || !this.peerManager) return;
-        
-        const trackStatus = this.peerManager.getTrackStatus();
-        const hostPeerId = this.getHostPeerId();
-        
-        if (hostPeerId && trackStatus.peers[hostPeerId]) {
-          const hostStatus = trackStatus.peers[hostPeerId];
-          
-          // Check if microphone track is missing or invalid
-          if (!hostStatus.hasMicrophone || hostStatus.audioSenders === 0) {
-            console.warn('⚠️ Host microphone track health check failed - attempting recovery');
-            await this.peerManager.ensureMicrophoneTracks();
-            
-            // Log recovery attempt
-            const newStatus = this.peerManager.getTrackStatus();
-            if (newStatus.peers[hostPeerId]?.hasMicrophone) {
-              console.log('✅ Host microphone track recovered successfully');
-            } else {
-              console.error('❌ Failed to recover host microphone track');
-            }
-          }
+    console.log('🎬 Processing movie sync:', { action, movieState });
+    
+    switch (action) {
+      case 'start-streaming':
+        await this.handleHostStartedStreaming(movieState);
+        break;
+
+      case 'play':
+        this.handleHostPlay(movieState);
+        break;
+
+      case 'pause':
+        this.handleHostPause(movieState);
+        break;
+
+      case 'seek':
+        this.handleHostSeek(movieState);
+        break;
+
+      case 'stop-streaming':
+        this.handleHostStoppedStreaming();
+        break;
+
+      case 'sync':
+        // Host should NOT process their own sync events
+        if (this.isHost) {
+          console.log('🔄 Host ignoring own sync event (no self-sync needed)');
+          return;
         }
-      } catch (error) {
-        console.error('❌ Error in microphone health check:', error);
-      }
-    }, 5000); // Check every 5 seconds
-    
-    console.log('🔍 Microphone health check started');
-  }
-
-  /**
-   * Stop microphone health check
-   */
-  stopMicrophoneHealthCheck() {
-    if (this.microphoneHealthCheckInterval) {
-      clearInterval(this.microphoneHealthCheckInterval);
-      this.microphoneHealthCheckInterval = null;
-      console.log('🔍 Microphone health check stopped');
-    }
-  }
-
-  /**
-   * Manually verify and fix microphone tracks (for debugging/testing)
-   */
-  async verifyMicrophoneTracks() {
-    if (!this.isHost || !this.peerManager) {
-      console.warn('⚠️ Cannot verify microphone tracks: not host or no peer manager');
-      return;
-    }
-    
-    try {
-      console.log('🔍 Manually verifying microphone tracks...');
-      
-      const trackStatus = this.peerManager.getTrackStatus();
-      console.log('📊 Current track status:', trackStatus);
-      
-      // Check if microphone tracks are missing
-      const hostPeerId = this.getHostPeerId();
-      if (hostPeerId && trackStatus.peers[hostPeerId]) {
-        const hostStatus = trackStatus.peers[hostPeerId];
         
-        if (!hostStatus.hasMicrophone || hostStatus.audioSenders === 0) {
-          console.warn('⚠️ Microphone tracks missing - attempting recovery...');
-          await this.peerManager.ensureMicrophoneTracks();
+        // For participants only: update playback state - DO NOT reinitialize video player
+        console.log('🔄 Participant processing sync from host');
+        
+        if (this.videoPlayer && movieState) {
+          // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
+          this.videoPlayer.syncWithHost('seek', movieState);
           
-          // Verify recovery
-          const newStatus = this.peerManager.getTrackStatus();
-          if (newStatus.peers[hostPeerId]?.hasMicrophone) {
-            console.log('✅ Microphone tracks recovered successfully');
-            this.showTemporaryMessage('🎙️ Microphone tracks recovered!', 'success');
+          // Then apply play/pause state
+          if (movieState.isPlaying) {
+            this.videoPlayer.syncWithHost('play', movieState);
           } else {
-            console.error('❌ Failed to recover microphone tracks');
-            this.showTemporaryMessage('❌ Failed to recover microphone tracks', 'error');
+            this.videoPlayer.syncWithHost('pause', movieState);
           }
-        } else {
-          console.log('✅ Microphone tracks are healthy');
-          this.showTemporaryMessage('🎙️ Microphone tracks are healthy', 'success');
+        } else if (!this.videoPlayer) {
+          // Only if video player doesn't exist (new participant), then initialize
+          console.log('🎬 New participant - initializing video player for sync');
+          await this.handleHostStartedStreaming(movieState);
         }
+        break;
+
+      default:
+        console.warn('Unknown movie sync action:', action);
+    }
+  }
+
+  /**
+   * Handle when host starts streaming (participants see video player)
+   */
+  async handleHostStartedStreaming(movieState) {
+    if (this.isHost) return; // Host already has the video player
+    
+    console.log('🎬 Host started streaming, transitioning from waiting screen to video player');
+    
+    // Update movie state
+    this.selectedMovie = {
+      name: movieState.title || 'Unknown Movie',
+      type: movieState.type || 'video/mp4',
+      size: movieState.size || 0
+    };
+    this.movieState = 'ready';
+    
+    // Update UI to show video player container
+    this.updateMovieStage();
+    
+    // Initialize video player for participant (but without file - they'll receive stream)
+    const videoPlayerContainer = this.root.querySelector('#video-player-container');
+    if (videoPlayerContainer) {
+      try {
+        // Import VideoPlayer dynamically to avoid circular dependencies
+        const { VideoPlayer } = await import('./VideoPlayer.js');
+        
+        this.videoPlayer = new VideoPlayer(
+          this.socketClient,
+          (state) => this.handleVideoStateChange(state)
+        );
+        
+        // For participants, we create a placeholder video element that will be controlled by the host
+        this.videoPlayer.initializeAsParticipant(videoPlayerContainer, movieState);
+        
+        console.log('✅ Participant video player initialized');
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize participant video player:', error);
+        this.movieState = 'error';
+        this.updateMovieStage();
       }
-    } catch (error) {
-      console.error('❌ Error verifying microphone tracks:', error);
-      this.showTemporaryMessage('❌ Error verifying microphone tracks', 'error');
     }
   }
 
   /**
-   * Event emitter functionality
+   * Handle host play/pause/seek events
    */
-  emit(event, data) {
-    // Dispatch custom event for external listeners
-    if (this.root) {
-      const customEvent = new CustomEvent(`roomview:${event}`, { detail: data });
-      this.root.dispatchEvent(customEvent);
-    }
-  }
-
-  render(initialData) {
-    const roomCode = initialData?.roomCode || '######';
-    const title = initialData?.room?.title || 'BeeMoo Room';
-    const participantCount = initialData?.participants?.length || 0;
-
-    return `
-      <section class="room-container" aria-label="Room">
-        <header class="room-header">
-          <div class="room-header-content">
-            <div class="room-info">
-              <h1 class="room-title">
-                <span class="room-title-text">${this.escapeHtml(title)}</span>
-                ${this.isHost ? '<span class="host-badge">HOST</span>' : ''}
-              </h1>
-              <div class="room-details">
-                <div class="room-code-container">
-                  <span class="room-code-label">Room Code:</span>
-                  <span class="room-code" title="Click to copy">${this.escapeHtml(roomCode)}</span>
-                  <button class="copy-btn" title="Copy room code">📋</button>
-                </div>
-                <div class="viewer-count">
-                  <span class="viewer-icon">👥</span>
-                  <span class="viewer-text">${participantCount} viewer${participantCount !== 1 ? 's' : ''}</span>
-                </div>
-              </div>
-            </div>
-            
-            <div class="room-controls">
-              <div class="voice-controls">
-                <button id="request-mic" class="btn btn-secondary btn-sm" title="Test microphone access">
-                  <span class="mic-icon">🔧</span>
-                  Setup Mic
-                </button>
-              </div>
-              <div class="room-actions">
-                <button id="leave-room" class="btn btn-danger btn-sm" title="Leave room permanently">
-                  <span class="leave-icon">🚪</span>
-                  Leave Room
-                </button>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        <div class="room-layout">
-          <aside class="audience-panel" aria-label="Audience">
-            <div class="audience-header">
-              <h3 class="audience-title">
-                <span class="audience-icon">👥</span>
-                Audience
-              </h3>
-            </div>
-            <div id="audience-container" class="audience-content"></div>
-          </aside>
-
-          <main class="room-stage" aria-label="Movie Stage">
-            <div class="stage-container">
-              ${this.renderMovieStage()}
-            </div>
-          </main>
-
-          <aside class="audio-panel" aria-label="Audio Controls">
-            <div class="audio-header">
-              <h3 class="audio-title">
-                <span class="audio-icon">🎵</span>
-                Audio Settings
-              </h3>
-              <button class="audio-toggle" id="audio-panel-toggle" title="Toggle audio settings">⚙️</button>
-            </div>
-            
-            <div class="audio-content" id="audio-content">
-              <div class="audio-controls-group">
-                <div class="control-row">
-                  <button id="mic-toggle" class="btn btn-mic" data-muted="false">
-                    <span class="mic-icon">🎤</span>
-                    <span class="mic-text">Mute Mic</span>
-                  </button>
-                </div>
-                
-                <div class="control-row">
-                  <label class="control-label">Microphone Device:</label>
-                  <select id="mic-device" class="control-select"></select>
-                </div>
-                
-                <div class="audio-features">
-                  <label class="feature-toggle">
-                    <input type="checkbox" id="aec" checked />
-                    <span class="toggle-slider"></span>
-                    <span class="toggle-label">Echo Cancellation</span>
-                  </label>
-                  
-                  <label class="feature-toggle">
-                    <input type="checkbox" id="ns" checked />
-                    <span class="toggle-slider"></span>
-                    <span class="toggle-label">Noise Suppression</span>
-                  </label>
-                  
-                  <label class="feature-toggle">
-                    <input type="checkbox" id="agc" checked />
-                    <span class="toggle-slider"></span>
-                    <span class="toggle-label">Auto Gain Control</span>
-                  </label>
-                </div>
-                
-                <div class="control-row">
-                  <button id="apply-audio" class="btn btn-primary btn-block">
-                    <span class="apply-icon">✅</span>
-                    Apply Settings
-                  </button>
-                </div>
-              </div>
-            </div>
-          </aside>
-        </div>
-      </section>
-    `;
-  }
-
-  escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
-  }
-
-  /**
-   * Reset critical operation flag (for debugging/testing)
-   */
-  resetCriticalOperationFlag() {
-    if (!this.peerManager) {
-      console.warn('⚠️ No peer manager available');
+  handleHostPlay(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('▶️ Host ignoring own play event (no self-sync needed)');
       return;
     }
     
+    console.log('▶️ Participant syncing with host play');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('play', syncState);
+  }
+
+  handleHostPause(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏸️ Host ignoring own pause event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏸️ Participant syncing with host pause');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('pause', syncState);
+  }
+
+  handleHostSeek(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏩ Host ignoring own seek event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏩ Participant syncing with host seek to:', movieState.currentTime);
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('seek', syncState);
+  }
+
+  handleHostStoppedStreaming() {
+    console.log('⏹️ Host stopped streaming');
+    
+    // Stop video streaming if host
+    if (this.isHost) {
+      this.stopVideoStreaming();
+    }
+    
+    // Reset movie state
+    this.selectedMovie = null;
+    this.movieState = 'none';
+    
+    // Clean up video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+    
+    // Update UI back to waiting state
+    this.updateMovieStage();
+  }
+
+  renderMovieStage() {
+    // Set initial movie state
+    if (this.movieState === 'none') {
+      this.movieState = 'selecting';
+    }
+    
+    return `<div class="movie-stage" id="movie-stage"></div>`;
+  }
+  
+  /**
+   * Handle leave room request with confirmation
+   */
+  async handleLeaveRoom() {
+    // Show confirmation dialog
+    const confirmed = await this.showLeaveConfirmation();
+    if (!confirmed) return;
+
+    console.log('🚪 User initiated hard leave...');
+
     try {
-      this.peerManager.resetCriticalOperationFlag();
-      this.showTemporaryMessage('🔓 Critical operation flag reset', 'success');
+      // Show loading state on leave button
+      const leaveBtn = this.root.querySelector('#leave-room');
+      if (leaveBtn) {
+        leaveBtn.disabled = true;
+        leaveBtn.innerHTML = '<span class="leave-icon">⏳</span>Leaving...';
+      }
+
+      // Emit leave room event to server
+      this.socketClient.emit('leave-room');
+      
+      // Listen for server confirmation
+      this.socketClient.on('room-left', (data) => {
+        console.log('✅ Server confirmed room left:', data);
+        this.performHardLeave();
+      });
+
+      // Also handle errors
+      this.socketClient.on('leave-room-error', (error) => {
+        console.error('❌ Leave room error:', error);
+        // Still perform hard leave even if server error
+        this.performHardLeave();
+      });
+
+      // Fallback timeout - perform hard leave anyway after 3 seconds
+      setTimeout(() => {
+        console.log('⏰ Leave timeout - performing hard leave anyway');
+        this.performHardLeave();
+      }, 3000);
+
     } catch (error) {
-      console.error('❌ Error resetting critical operation flag:', error);
-      this.showTemporaryMessage('❌ Error resetting flag', 'error');
+      console.error('❌ Error during leave process:', error);
+      // Still perform hard leave on error
+      this.performHardLeave();
     }
   }
-}
+
+  /**
+   * Show leave confirmation dialog
+   */
+  async showLeaveConfirmation() {
+    return new Promise((resolve) => {
+      // Create confirmation modal
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay leave-confirmation-modal';
+      modal.innerHTML = `
+        <div class="modal-content" role="dialog" aria-labelledby="leave-title" aria-modal="true">
+          <div class="modal-header">
+            <h3 id="leave-title">🚪 Leave Room</h3>
+          </div>
+          <div class="modal-body">
+            <p><strong>Are you sure you want to leave?</strong></p>
+            <ul style="margin: 10px 0; padding-left: 20px; color: #666;">
+              <li>You'll be disconnected from the movie party</li>
+              <li>Your session will be completely cleared</li>
+              <li>You'll need to rejoin manually if you want to come back</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-leave">Cancel</button>
+            <button class="btn btn-danger" id="confirm-leave">
+              <span>🚪</span> Leave Room
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Handle confirmation
+      const confirmBtn = modal.querySelector('#confirm-leave');
+      const cancelBtn = modal.querySelector('#cancel-leave');
+
+      const cleanup = () => {
+        modal.remove();
+      };
+
+      confirmBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // ESC key and overlay click to cancel
+      const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+          cleanup();
+          resolve(false);
+          document.removeEventListener('keydown', handleEscape);
+        }
+      };
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleEscape);
+
+      // Focus the cancel button by default
+      setTimeout(() => cancelBtn.focus(), 100);
+    });
+  }
+
+  /**
+   * Perform complete hard leave - clear everything and go to landing
+   */
+  performHardLeave() {
+    console.log('🧹 Performing hard leave - clearing all data...');
+
+    // Stop all ongoing activities
+    this.cleanup();
+
+    // Clear all local storage related to BeeMoo
+    try {
+      localStorage.removeItem('beemoo-room-session');
+      localStorage.removeItem('beemoo-user-preferences');
+      localStorage.removeItem('beemoo-audio-settings');
+      // Clear any other BeeMoo related storage
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          localStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared local storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some local storage:', error);
+    }
+
+    // Clear session storage too
+    try {
+      sessionStorage.removeItem('beemoo-room-session');
+      const keys = Object.keys(sessionStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared session storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some session storage:', error);
+    }
+
+    // Disconnect from socket completely
+    if (this.socketClient) {
+      this.socketClient.disconnect();
+      console.log('✅ Disconnected from socket');
+    }
+
+    // Navigate back to landing page
+    this.navigateToLanding();
+  }
+
+  /**
+   * Navigate back to landing page with fresh state
+   */
+  navigateToLanding() {
+    console.log('🏠 Navigating to landing page...');
+
+    // Emit leave event for parent app
+    this.emit('leave-room', { 
+      reason: 'user-initiated',
+      hardLeave: true 
+    });
+
+    // Fallback: manually reload page if parent doesn't handle the event
+    setTimeout(() => {
+      console.log('🔄 Fallback: Reloading page to ensure clean state');
+      window.location.href = window.location.origin;
+    }, 1000);
+  }
+
+  /**
+   * Cleanup all resources and connections
+   */
+  cleanup() {
+    console.log('🧹 Cleaning up RoomView resources...');
+
+    // Stop video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+
+    // Stop peer manager and WebRTC connections
+    if (this.peerManager) {
+      this.peerManager.destroy();
+      this.peerManager = null;
+    }
+
+    // Stop voice chat
+    if (this.voiceActive) {
+      this.stopVoice();
+    }
+
+    // Clean up participant list
+    if (this.participantList) {
+      this.participantList.destroy();
+    }
+
+    // Clear participants map
+    this.participants.clear();
+
+    // Remove all socket event listeners related to room
+    if (this.socketClient) {
+      this.socketClient.off('participant-joined');
+      this.socketClient.off('participant-left');
+      this.socketClient.off('participant-disconnected');
+      this.socketClient.off('host-disconnected');
+      this.socketClient.off('room-deleted');
+      this.socketClient.off('movie-state-updated');
+      this.socketClient.off('movie-control');
+      this.socketClient.off('mic-status-updated');
+      this.socketClient.off('room-left');
+      this.socketClient.off('leave-room-error');
+    }
+
+    // Stop any ongoing timers or intervals
+    if (this.videoSyncInterval) {
+      clearInterval(this.videoSyncInterval);
+      this.videoSyncInterval = null;
+    }
+
+    console.log('✅ RoomView cleanup complete');
+  }
+
+  /**
+   * Handle movie synchronization from host
+   */
+  async handleMovieSync(data) {
+    const { action, movieState } = data;
+    
+    console.log('🎬 Processing movie sync:', { action, movieState });
+    
+    switch (action) {
+      case 'start-streaming':
+        await this.handleHostStartedStreaming(movieState);
+        break;
+
+      case 'play':
+        this.handleHostPlay(movieState);
+        break;
+
+      case 'pause':
+        this.handleHostPause(movieState);
+        break;
+
+      case 'seek':
+        this.handleHostSeek(movieState);
+        break;
+
+      case 'stop-streaming':
+        this.handleHostStoppedStreaming();
+        break;
+
+      case 'sync':
+        // Host should NOT process their own sync events
+        if (this.isHost) {
+          console.log('🔄 Host ignoring own sync event (no self-sync needed)');
+          return;
+        }
+        
+        // For participants only: update playback state - DO NOT reinitialize video player
+        console.log('🔄 Participant processing sync from host');
+        
+        if (this.videoPlayer && movieState) {
+          // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
+          this.videoPlayer.syncWithHost('seek', movieState);
+          
+          // Then apply play/pause state
+          if (movieState.isPlaying) {
+            this.videoPlayer.syncWithHost('play', movieState);
+          } else {
+            this.videoPlayer.syncWithHost('pause', movieState);
+          }
+        } else if (!this.videoPlayer) {
+          // Only if video player doesn't exist (new participant), then initialize
+          console.log('🎬 New participant - initializing video player for sync');
+          await this.handleHostStartedStreaming(movieState);
+        }
+        break;
+
+      default:
+        console.warn('Unknown movie sync action:', action);
+    }
+  }
+
+  /**
+   * Handle when host starts streaming (participants see video player)
+   */
+  async handleHostStartedStreaming(movieState) {
+    if (this.isHost) return; // Host already has the video player
+    
+    console.log('🎬 Host started streaming, transitioning from waiting screen to video player');
+    
+    // Update movie state
+    this.selectedMovie = {
+      name: movieState.title || 'Unknown Movie',
+      type: movieState.type || 'video/mp4',
+      size: movieState.size || 0
+    };
+    this.movieState = 'ready';
+    
+    // Update UI to show video player container
+    this.updateMovieStage();
+    
+    // Initialize video player for participant (but without file - they'll receive stream)
+    const videoPlayerContainer = this.root.querySelector('#video-player-container');
+    if (videoPlayerContainer) {
+      try {
+        // Import VideoPlayer dynamically to avoid circular dependencies
+        const { VideoPlayer } = await import('./VideoPlayer.js');
+        
+        this.videoPlayer = new VideoPlayer(
+          this.socketClient,
+          (state) => this.handleVideoStateChange(state)
+        );
+        
+        // For participants, we create a placeholder video element that will be controlled by the host
+        this.videoPlayer.initializeAsParticipant(videoPlayerContainer, movieState);
+        
+        console.log('✅ Participant video player initialized');
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize participant video player:', error);
+        this.movieState = 'error';
+        this.updateMovieStage();
+      }
+    }
+  }
+
+  /**
+   * Handle host play/pause/seek events
+   */
+  handleHostPlay(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('▶️ Host ignoring own play event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('▶️ Participant syncing with host play');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('play', syncState);
+  }
+
+  handleHostPause(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏸️ Host ignoring own pause event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏸️ Participant syncing with host pause');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('pause', syncState);
+  }
+
+  handleHostSeek(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏩ Host ignoring own seek event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏩ Participant syncing with host seek to:', movieState.currentTime);
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('seek', syncState);
+  }
+
+  handleHostStoppedStreaming() {
+    console.log('⏹️ Host stopped streaming');
+    
+    // Stop video streaming if host
+    if (this.isHost) {
+      this.stopVideoStreaming();
+    }
+    
+    // Reset movie state
+    this.selectedMovie = null;
+    this.movieState = 'none';
+    
+    // Clean up video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+    
+    // Update UI back to waiting state
+    this.updateMovieStage();
+  }
+
+  renderMovieStage() {
+    // Set initial movie state
+    if (this.movieState === 'none') {
+      this.movieState = 'selecting';
+    }
+    
+    return `<div class="movie-stage" id="movie-stage"></div>`;
+  }
+  
+  /**
+   * Handle leave room request with confirmation
+   */
+  async handleLeaveRoom() {
+    // Show confirmation dialog
+    const confirmed = await this.showLeaveConfirmation();
+    if (!confirmed) return;
+
+    console.log('🚪 User initiated hard leave...');
+
+    try {
+      // Show loading state on leave button
+      const leaveBtn = this.root.querySelector('#leave-room');
+      if (leaveBtn) {
+        leaveBtn.disabled = true;
+        leaveBtn.innerHTML = '<span class="leave-icon">⏳</span>Leaving...';
+      }
+
+      // Emit leave room event to server
+      this.socketClient.emit('leave-room');
+      
+      // Listen for server confirmation
+      this.socketClient.on('room-left', (data) => {
+        console.log('✅ Server confirmed room left:', data);
+        this.performHardLeave();
+      });
+
+      // Also handle errors
+      this.socketClient.on('leave-room-error', (error) => {
+        console.error('❌ Leave room error:', error);
+        // Still perform hard leave even if server error
+        this.performHardLeave();
+      });
+
+      // Fallback timeout - perform hard leave anyway after 3 seconds
+      setTimeout(() => {
+        console.log('⏰ Leave timeout - performing hard leave anyway');
+        this.performHardLeave();
+      }, 3000);
+
+    } catch (error) {
+      console.error('❌ Error during leave process:', error);
+      // Still perform hard leave on error
+      this.performHardLeave();
+    }
+  }
+
+  /**
+   * Show leave confirmation dialog
+   */
+  async showLeaveConfirmation() {
+    return new Promise((resolve) => {
+      // Create confirmation modal
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay leave-confirmation-modal';
+      modal.innerHTML = `
+        <div class="modal-content" role="dialog" aria-labelledby="leave-title" aria-modal="true">
+          <div class="modal-header">
+            <h3 id="leave-title">🚪 Leave Room</h3>
+          </div>
+          <div class="modal-body">
+            <p><strong>Are you sure you want to leave?</strong></p>
+            <ul style="margin: 10px 0; padding-left: 20px; color: #666;">
+              <li>You'll be disconnected from the movie party</li>
+              <li>Your session will be completely cleared</li>
+              <li>You'll need to rejoin manually if you want to come back</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-leave">Cancel</button>
+            <button class="btn btn-danger" id="confirm-leave">
+              <span>🚪</span> Leave Room
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Handle confirmation
+      const confirmBtn = modal.querySelector('#confirm-leave');
+      const cancelBtn = modal.querySelector('#cancel-leave');
+
+      const cleanup = () => {
+        modal.remove();
+      };
+
+      confirmBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // ESC key and overlay click to cancel
+      const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+          cleanup();
+          resolve(false);
+          document.removeEventListener('keydown', handleEscape);
+        }
+      };
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleEscape);
+
+      // Focus the cancel button by default
+      setTimeout(() => cancelBtn.focus(), 100);
+    });
+  }
+
+  /**
+   * Perform complete hard leave - clear everything and go to landing
+   */
+  performHardLeave() {
+    console.log('🧹 Performing hard leave - clearing all data...');
+
+    // Stop all ongoing activities
+    this.cleanup();
+
+    // Clear all local storage related to BeeMoo
+    try {
+      localStorage.removeItem('beemoo-room-session');
+      localStorage.removeItem('beemoo-user-preferences');
+      localStorage.removeItem('beemoo-audio-settings');
+      // Clear any other BeeMoo related storage
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          localStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared local storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some local storage:', error);
+    }
+
+    // Clear session storage too
+    try {
+      sessionStorage.removeItem('beemoo-room-session');
+      const keys = Object.keys(sessionStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared session storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some session storage:', error);
+    }
+
+    // Disconnect from socket completely
+    if (this.socketClient) {
+      this.socketClient.disconnect();
+      console.log('✅ Disconnected from socket');
+    }
+
+    // Navigate back to landing page
+    this.navigateToLanding();
+  }
+
+  /**
+   * Navigate back to landing page with fresh state
+   */
+  navigateToLanding() {
+    console.log('🏠 Navigating to landing page...');
+
+    // Emit leave event for parent app
+    this.emit('leave-room', { 
+      reason: 'user-initiated',
+      hardLeave: true 
+    });
+
+    // Fallback: manually reload page if parent doesn't handle the event
+    setTimeout(() => {
+      console.log('🔄 Fallback: Reloading page to ensure clean state');
+      window.location.href = window.location.origin;
+    }, 1000);
+  }
+
+  /**
+   * Cleanup all resources and connections
+   */
+  cleanup() {
+    console.log('🧹 Cleaning up RoomView resources...');
+
+    // Stop video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+
+    // Stop peer manager and WebRTC connections
+    if (this.peerManager) {
+      this.peerManager.destroy();
+      this.peerManager = null;
+    }
+
+    // Stop voice chat
+    if (this.voiceActive) {
+      this.stopVoice();
+    }
+
+    // Clean up participant list
+    if (this.participantList) {
+      this.participantList.destroy();
+    }
+
+    // Clear participants map
+    this.participants.clear();
+
+    // Remove all socket event listeners related to room
+    if (this.socketClient) {
+      this.socketClient.off('participant-joined');
+      this.socketClient.off('participant-left');
+      this.socketClient.off('participant-disconnected');
+      this.socketClient.off('host-disconnected');
+      this.socketClient.off('room-deleted');
+      this.socketClient.off('movie-state-updated');
+      this.socketClient.off('movie-control');
+      this.socketClient.off('mic-status-updated');
+      this.socketClient.off('room-left');
+      this.socketClient.off('leave-room-error');
+    }
+
+    // Stop any ongoing timers or intervals
+    if (this.videoSyncInterval) {
+      clearInterval(this.videoSyncInterval);
+      this.videoSyncInterval = null;
+    }
+
+    console.log('✅ RoomView cleanup complete');
+  }
+
+  /**
+   * Handle movie synchronization from host
+   */
+  async handleMovieSync(data) {
+    const { action, movieState } = data;
+    
+    console.log('🎬 Processing movie sync:', { action, movieState });
+    
+    switch (action) {
+      case 'start-streaming':
+        await this.handleHostStartedStreaming(movieState);
+        break;
+
+      case 'play':
+        this.handleHostPlay(movieState);
+        break;
+
+      case 'pause':
+        this.handleHostPause(movieState);
+        break;
+
+      case 'seek':
+        this.handleHostSeek(movieState);
+        break;
+
+      case 'stop-streaming':
+        this.handleHostStoppedStreaming();
+        break;
+
+      case 'sync':
+        // Host should NOT process their own sync events
+        if (this.isHost) {
+          console.log('🔄 Host ignoring own sync event (no self-sync needed)');
+          return;
+        }
+        
+        // For participants only: update playback state - DO NOT reinitialize video player
+        console.log('🔄 Participant processing sync from host');
+        
+        if (this.videoPlayer && movieState) {
+          // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
+          this.videoPlayer.syncWithHost('seek', movieState);
+          
+          // Then apply play/pause state
+          if (movieState.isPlaying) {
+            this.videoPlayer.syncWithHost('play', movieState);
+          } else {
+            this.videoPlayer.syncWithHost('pause', movieState);
+          }
+        } else if (!this.videoPlayer) {
+          // Only if video player doesn't exist (new participant), then initialize
+          console.log('🎬 New participant - initializing video player for sync');
+          await this.handleHostStartedStreaming(movieState);
+        }
+        break;
+
+      default:
+        console.warn('Unknown movie sync action:', action);
+    }
+  }
+
+  /**
+   * Handle when host starts streaming (participants see video player)
+   */
+  async handleHostStartedStreaming(movieState) {
+    if (this.isHost) return; // Host already has the video player
+    
+    console.log('🎬 Host started streaming, transitioning from waiting screen to video player');
+    
+    // Update movie state
+    this.selectedMovie = {
+      name: movieState.title || 'Unknown Movie',
+      type: movieState.type || 'video/mp4',
+      size: movieState.size || 0
+    };
+    this.movieState = 'ready';
+    
+    // Update UI to show video player container
+    this.updateMovieStage();
+    
+    // Initialize video player for participant (but without file - they'll receive stream)
+    const videoPlayerContainer = this.root.querySelector('#video-player-container');
+    if (videoPlayerContainer) {
+      try {
+        // Import VideoPlayer dynamically to avoid circular dependencies
+        const { VideoPlayer } = await import('./VideoPlayer.js');
+        
+        this.videoPlayer = new VideoPlayer(
+          this.socketClient,
+          (state) => this.handleVideoStateChange(state)
+        );
+        
+        // For participants, we create a placeholder video element that will be controlled by the host
+        this.videoPlayer.initializeAsParticipant(videoPlayerContainer, movieState);
+        
+        console.log('✅ Participant video player initialized');
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize participant video player:', error);
+        this.movieState = 'error';
+        this.updateMovieStage();
+      }
+    }
+  }
+
+  /**
+   * Handle host play/pause/seek events
+   */
+  handleHostPlay(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('▶️ Host ignoring own play event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('▶️ Participant syncing with host play');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('play', syncState);
+  }
+
+  handleHostPause(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏸️ Host ignoring own pause event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏸️ Participant syncing with host pause');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('pause', syncState);
+  }
+
+  handleHostSeek(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏩ Host ignoring own seek event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏩ Participant syncing with host seek to:', movieState.currentTime);
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('seek', syncState);
+  }
+
+  handleHostStoppedStreaming() {
+    console.log('⏹️ Host stopped streaming');
+    
+    // Stop video streaming if host
+    if (this.isHost) {
+      this.stopVideoStreaming();
+    }
+    
+    // Reset movie state
+    this.selectedMovie = null;
+    this.movieState = 'none';
+    
+    // Clean up video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+    
+    // Update UI back to waiting state
+    this.updateMovieStage();
+  }
+
+  renderMovieStage() {
+    // Set initial movie state
+    if (this.movieState === 'none') {
+      this.movieState = 'selecting';
+    }
+    
+    return `<div class="movie-stage" id="movie-stage"></div>`;
+  }
+  
+  /**
+   * Handle leave room request with confirmation
+   */
+  async handleLeaveRoom() {
+    // Show confirmation dialog
+    const confirmed = await this.showLeaveConfirmation();
+    if (!confirmed) return;
+
+    console.log('🚪 User initiated hard leave...');
+
+    try {
+      // Show loading state on leave button
+      const leaveBtn = this.root.querySelector('#leave-room');
+      if (leaveBtn) {
+        leaveBtn.disabled = true;
+        leaveBtn.innerHTML = '<span class="leave-icon">⏳</span>Leaving...';
+      }
+
+      // Emit leave room event to server
+      this.socketClient.emit('leave-room');
+      
+      // Listen for server confirmation
+      this.socketClient.on('room-left', (data) => {
+        console.log('✅ Server confirmed room left:', data);
+        this.performHardLeave();
+      });
+
+      // Also handle errors
+      this.socketClient.on('leave-room-error', (error) => {
+        console.error('❌ Leave room error:', error);
+        // Still perform hard leave even if server error
+        this.performHardLeave();
+      });
+
+      // Fallback timeout - perform hard leave anyway after 3 seconds
+      setTimeout(() => {
+        console.log('⏰ Leave timeout - performing hard leave anyway');
+        this.performHardLeave();
+      }, 3000);
+
+    } catch (error) {
+      console.error('❌ Error during leave process:', error);
+      // Still perform hard leave on error
+      this.performHardLeave();
+    }
+  }
+
+  /**
+   * Show leave confirmation dialog
+   */
+  async showLeaveConfirmation() {
+    return new Promise((resolve) => {
+      // Create confirmation modal
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay leave-confirmation-modal';
+      modal.innerHTML = `
+        <div class="modal-content" role="dialog" aria-labelledby="leave-title" aria-modal="true">
+          <div class="modal-header">
+            <h3 id="leave-title">🚪 Leave Room</h3>
+          </div>
+          <div class="modal-body">
+            <p><strong>Are you sure you want to leave?</strong></p>
+            <ul style="margin: 10px 0; padding-left: 20px; color: #666;">
+              <li>You'll be disconnected from the movie party</li>
+              <li>Your session will be completely cleared</li>
+              <li>You'll need to rejoin manually if you want to come back</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-leave">Cancel</button>
+            <button class="btn btn-danger" id="confirm-leave">
+              <span>🚪</span> Leave Room
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Handle confirmation
+      const confirmBtn = modal.querySelector('#confirm-leave');
+      const cancelBtn = modal.querySelector('#cancel-leave');
+
+      const cleanup = () => {
+        modal.remove();
+      };
+
+      confirmBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // ESC key and overlay click to cancel
+      const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+          cleanup();
+          resolve(false);
+          document.removeEventListener('keydown', handleEscape);
+        }
+      };
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleEscape);
+
+      // Focus the cancel button by default
+      setTimeout(() => cancelBtn.focus(), 100);
+    });
+  }
+
+  /**
+   * Perform complete hard leave - clear everything and go to landing
+   */
+  performHardLeave() {
+    console.log('🧹 Performing hard leave - clearing all data...');
+
+    // Stop all ongoing activities
+    this.cleanup();
+
+    // Clear all local storage related to BeeMoo
+    try {
+      localStorage.removeItem('beemoo-room-session');
+      localStorage.removeItem('beemoo-user-preferences');
+      localStorage.removeItem('beemoo-audio-settings');
+      // Clear any other BeeMoo related storage
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          localStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared local storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some local storage:', error);
+    }
+
+    // Clear session storage too
+    try {
+      sessionStorage.removeItem('beemoo-room-session');
+      const keys = Object.keys(sessionStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared session storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some session storage:', error);
+    }
+
+    // Disconnect from socket completely
+    if (this.socketClient) {
+      this.socketClient.disconnect();
+      console.log('✅ Disconnected from socket');
+    }
+
+    // Navigate back to landing page
+    this.navigateToLanding();
+  }
+
+  /**
+   * Navigate back to landing page with fresh state
+   */
+  navigateToLanding() {
+    console.log('🏠 Navigating to landing page...');
+
+    // Emit leave event for parent app
+    this.emit('leave-room', { 
+      reason: 'user-initiated',
+      hardLeave: true 
+    });
+
+    // Fallback: manually reload page if parent doesn't handle the event
+    setTimeout(() => {
+      console.log('🔄 Fallback: Reloading page to ensure clean state');
+      window.location.href = window.location.origin;
+    }, 1000);
+  }
+
+  /**
+   * Cleanup all resources and connections
+   */
+  cleanup() {
+    console.log('🧹 Cleaning up RoomView resources...');
+
+    // Stop video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+
+    // Stop peer manager and WebRTC connections
+    if (this.peerManager) {
+      this.peerManager.destroy();
+      this.peerManager = null;
+    }
+
+    // Stop voice chat
+    if (this.voiceActive) {
+      this.stopVoice();
+    }
+
+    // Clean up participant list
+    if (this.participantList) {
+      this.participantList.destroy();
+    }
+
+    // Clear participants map
+    this.participants.clear();
+
+    // Remove all socket event listeners related to room
+    if (this.socketClient) {
+      this.socketClient.off('participant-joined');
+      this.socketClient.off('participant-left');
+      this.socketClient.off('participant-disconnected');
+      this.socketClient.off('host-disconnected');
+      this.socketClient.off('room-deleted');
+      this.socketClient.off('movie-state-updated');
+      this.socketClient.off('movie-control');
+      this.socketClient.off('mic-status-updated');
+      this.socketClient.off('room-left');
+      this.socketClient.off('leave-room-error');
+    }
+
+    // Stop any ongoing timers or intervals
+    if (this.videoSyncInterval) {
+      clearInterval(this.videoSyncInterval);
+      this.videoSyncInterval = null;
+    }
+
+    console.log('✅ RoomView cleanup complete');
+  }
+
+  /**
+   * Handle movie synchronization from host
+   */
+  async handleMovieSync(data) {
+    const { action, movieState } = data;
+    
+    console.log('🎬 Processing movie sync:', { action, movieState });
+    
+    switch (action) {
+      case 'start-streaming':
+        await this.handleHostStartedStreaming(movieState);
+        break;
+
+      case 'play':
+        this.handleHostPlay(movieState);
+        break;
+
+      case 'pause':
+        this.handleHostPause(movieState);
+        break;
+
+      case 'seek':
+        this.handleHostSeek(movieState);
+        break;
+
+      case 'stop-streaming':
+        this.handleHostStoppedStreaming();
+        break;
+
+      case 'sync':
+        // Host should NOT process their own sync events
+        if (this.isHost) {
+          console.log('🔄 Host ignoring own sync event (no self-sync needed)');
+          return;
+        }
+        
+        // For participants only: update playback state - DO NOT reinitialize video player
+        console.log('🔄 Participant processing sync from host');
+        
+        if (this.videoPlayer && movieState) {
+          // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
+          this.videoPlayer.syncWithHost('seek', movieState);
+          
+          // Then apply play/pause state
+          if (movieState.isPlaying) {
+            this.videoPlayer.syncWithHost('play', movieState);
+          } else {
+            this.videoPlayer.syncWithHost('pause', movieState);
+          }
+        } else if (!this.videoPlayer) {
+          // Only if video player doesn't exist (new participant), then initialize
+          console.log('🎬 New participant - initializing video player for sync');
+          await this.handleHostStartedStreaming(movieState);
+        }
+        break;
+
+      default:
+        console.warn('Unknown movie sync action:', action);
+    }
+  }
+
+  /**
+   * Handle when host starts streaming (participants see video player)
+   */
+  async handleHostStartedStreaming(movieState) {
+    if (this.isHost) return; // Host already has the video player
+    
+    console.log('🎬 Host started streaming, transitioning from waiting screen to video player');
+    
+    // Update movie state
+    this.selectedMovie = {
+      name: movieState.title || 'Unknown Movie',
+      type: movieState.type || 'video/mp4',
+      size: movieState.size || 0
+    };
+    this.movieState = 'ready';
+    
+    // Update UI to show video player container
+    this.updateMovieStage();
+    
+    // Initialize video player for participant (but without file - they'll receive stream)
+    const videoPlayerContainer = this.root.querySelector('#video-player-container');
+    if (videoPlayerContainer) {
+      try {
+        // Import VideoPlayer dynamically to avoid circular dependencies
+        const { VideoPlayer } = await import('./VideoPlayer.js');
+        
+        this.videoPlayer = new VideoPlayer(
+          this.socketClient,
+          (state) => this.handleVideoStateChange(state)
+        );
+        
+        // For participants, we create a placeholder video element that will be controlled by the host
+        this.videoPlayer.initializeAsParticipant(videoPlayerContainer, movieState);
+        
+        console.log('✅ Participant video player initialized');
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize participant video player:', error);
+        this.movieState = 'error';
+        this.updateMovieStage();
+      }
+    }
+  }
+
+  /**
+   * Handle host play/pause/seek events
+   */
+  handleHostPlay(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('▶️ Host ignoring own play event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('▶️ Participant syncing with host play');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('play', syncState);
+  }
+
+  handleHostPause(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏸️ Host ignoring own pause event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏸️ Participant syncing with host pause');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('pause', syncState);
+  }
+
+  handleHostSeek(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏩ Host ignoring own seek event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏩ Participant syncing with host seek to:', movieState.currentTime);
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('seek', syncState);
+  }
+
+  handleHostStoppedStreaming() {
+    console.log('⏹️ Host stopped streaming');
+    
+    // Stop video streaming if host
+    if (this.isHost) {
+      this.stopVideoStreaming();
+    }
+    
+    // Reset movie state
+    this.selectedMovie = null;
+    this.movieState = 'none';
+    
+    // Clean up video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+    
+    // Update UI back to waiting state
+    this.updateMovieStage();
+  }
+
+  renderMovieStage() {
+    // Set initial movie state
+    if (this.movieState === 'none') {
+      this.movieState = 'selecting';
+    }
+    
+    return `<div class="movie-stage" id="movie-stage"></div>`;
+  }
+  
+  /**
+   * Handle leave room request with confirmation
+   */
+  async handleLeaveRoom() {
+    // Show confirmation dialog
+    const confirmed = await this.showLeaveConfirmation();
+    if (!confirmed) return;
+
+    console.log('🚪 User initiated hard leave...');
+
+    try {
+      // Show loading state on leave button
+      const leaveBtn = this.root.querySelector('#leave-room');
+      if (leaveBtn) {
+        leaveBtn.disabled = true;
+        leaveBtn.innerHTML = '<span class="leave-icon">⏳</span>Leaving...';
+      }
+
+      // Emit leave room event to server
+      this.socketClient.emit('leave-room');
+      
+      // Listen for server confirmation
+      this.socketClient.on('room-left', (data) => {
+        console.log('✅ Server confirmed room left:', data);
+        this.performHardLeave();
+      });
+
+      // Also handle errors
+      this.socketClient.on('leave-room-error', (error) => {
+        console.error('❌ Leave room error:', error);
+        // Still perform hard leave even if server error
+        this.performHardLeave();
+      });
+
+      // Fallback timeout - perform hard leave anyway after 3 seconds
+      setTimeout(() => {
+        console.log('⏰ Leave timeout - performing hard leave anyway');
+        this.performHardLeave();
+      }, 3000);
+
+    } catch (error) {
+      console.error('❌ Error during leave process:', error);
+      // Still perform hard leave on error
+      this.performHardLeave();
+    }
+  }
+
+  /**
+   * Show leave confirmation dialog
+   */
+  async showLeaveConfirmation() {
+    return new Promise((resolve) => {
+      // Create confirmation modal
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay leave-confirmation-modal';
+      modal.innerHTML = `
+        <div class="modal-content" role="dialog" aria-labelledby="leave-title" aria-modal="true">
+          <div class="modal-header">
+            <h3 id="leave-title">🚪 Leave Room</h3>
+          </div>
+          <div class="modal-body">
+            <p><strong>Are you sure you want to leave?</strong></p>
+            <ul style="margin: 10px 0; padding-left: 20px; color: #666;">
+              <li>You'll be disconnected from the movie party</li>
+              <li>Your session will be completely cleared</li>
+              <li>You'll need to rejoin manually if you want to come back</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-leave">Cancel</button>
+            <button class="btn btn-danger" id="confirm-leave">
+              <span>🚪</span> Leave Room
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Handle confirmation
+      const confirmBtn = modal.querySelector('#confirm-leave');
+      const cancelBtn = modal.querySelector('#cancel-leave');
+
+      const cleanup = () => {
+        modal.remove();
+      };
+
+      confirmBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // ESC key and overlay click to cancel
+      const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+          cleanup();
+          resolve(false);
+          document.removeEventListener('keydown', handleEscape);
+        }
+      };
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleEscape);
+
+      // Focus the cancel button by default
+      setTimeout(() => cancelBtn.focus(), 100);
+    });
+  }
+
+  /**
+   * Perform complete hard leave - clear everything and go to landing
+   */
+  performHardLeave() {
+    console.log('🧹 Performing hard leave - clearing all data...');
+
+    // Stop all ongoing activities
+    this.cleanup();
+
+    // Clear all local storage related to BeeMoo
+    try {
+      localStorage.removeItem('beemoo-room-session');
+      localStorage.removeItem('beemoo-user-preferences');
+      localStorage.removeItem('beemoo-audio-settings');
+      // Clear any other BeeMoo related storage
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          localStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared local storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some local storage:', error);
+    }
+
+    // Clear session storage too
+    try {
+      sessionStorage.removeItem('beemoo-room-session');
+      const keys = Object.keys(sessionStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared session storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some session storage:', error);
+    }
+
+    // Disconnect from socket completely
+    if (this.socketClient) {
+      this.socketClient.disconnect();
+      console.log('✅ Disconnected from socket');
+    }
+
+    // Navigate back to landing page
+    this.navigateToLanding();
+  }
+
+  /**
+   * Navigate back to landing page with fresh state
+   */
+  navigateToLanding() {
+    console.log('🏠 Navigating to landing page...');
+
+    // Emit leave event for parent app
+    this.emit('leave-room', { 
+      reason: 'user-initiated',
+      hardLeave: true 
+    });
+
+    // Fallback: manually reload page if parent doesn't handle the event
+    setTimeout(() => {
+      console.log('🔄 Fallback: Reloading page to ensure clean state');
+      window.location.href = window.location.origin;
+    }, 1000);
+  }
+
+  /**
+   * Cleanup all resources and connections
+   */
+  cleanup() {
+    console.log('🧹 Cleaning up RoomView resources...');
+
+    // Stop video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+
+    // Stop peer manager and WebRTC connections
+    if (this.peerManager) {
+      this.peerManager.destroy();
+      this.peerManager = null;
+    }
+
+    // Stop voice chat
+    if (this.voiceActive) {
+      this.stopVoice();
+    }
+
+    // Clean up participant list
+    if (this.participantList) {
+      this.participantList.destroy();
+    }
+
+    // Clear participants map
+    this.participants.clear();
+
+    // Remove all socket event listeners related to room
+    if (this.socketClient) {
+      this.socketClient.off('participant-joined');
+      this.socketClient.off('participant-left');
+      this.socketClient.off('participant-disconnected');
+      this.socketClient.off('host-disconnected');
+      this.socketClient.off('room-deleted');
+      this.socketClient.off('movie-state-updated');
+      this.socketClient.off('movie-control');
+      this.socketClient.off('mic-status-updated');
+      this.socketClient.off('room-left');
+      this.socketClient.off('leave-room-error');
+    }
+
+    // Stop any ongoing timers or intervals
+    if (this.videoSyncInterval) {
+      clearInterval(this.videoSyncInterval);
+      this.videoSyncInterval = null;
+    }
+
+    console.log('✅ RoomView cleanup complete');
+  }
+
+  /**
+   * Handle movie synchronization from host
+   */
+  async handleMovieSync(data) {
+    const { action, movieState } = data;
+    
+    console.log('🎬 Processing movie sync:', { action, movieState });
+    
+    switch (action) {
+      case 'start-streaming':
+        await this.handleHostStartedStreaming(movieState);
+        break;
+
+      case 'play':
+        this.handleHostPlay(movieState);
+        break;
+
+      case 'pause':
+        this.handleHostPause(movieState);
+        break;
+
+      case 'seek':
+        this.handleHostSeek(movieState);
+        break;
+
+      case 'stop-streaming':
+        this.handleHostStoppedStreaming();
+        break;
+
+      case 'sync':
+        // Host should NOT process their own sync events
+        if (this.isHost) {
+          console.log('🔄 Host ignoring own sync event (no self-sync needed)');
+          return;
+        }
+        
+        // For participants only: update playback state - DO NOT reinitialize video player
+        console.log('🔄 Participant processing sync from host');
+        
+        if (this.videoPlayer && movieState) {
+          // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
+          this.videoPlayer.syncWithHost('seek', movieState);
+          
+          // Then apply play/pause state
+          if (movieState.isPlaying) {
+            this.videoPlayer.syncWithHost('play', movieState);
+          } else {
+            this.videoPlayer.syncWithHost('pause', movieState);
+          }
+        } else if (!this.videoPlayer) {
+          // Only if video player doesn't exist (new participant), then initialize
+          console.log('🎬 New participant - initializing video player for sync');
+          await this.handleHostStartedStreaming(movieState);
+        }
+        break;
+
+      default:
+        console.warn('Unknown movie sync action:', action);
+    }
+  }
+
+  /**
+   * Handle when host starts streaming (participants see video player)
+   */
+  async handleHostStartedStreaming(movieState) {
+    if (this.isHost) return; // Host already has the video player
+    
+    console.log('🎬 Host started streaming, transitioning from waiting screen to video player');
+    
+    // Update movie state
+    this.selectedMovie = {
+      name: movieState.title || 'Unknown Movie',
+      type: movieState.type || 'video/mp4',
+      size: movieState.size || 0
+    };
+    this.movieState = 'ready';
+    
+    // Update UI to show video player container
+    this.updateMovieStage();
+    
+    // Initialize video player for participant (but without file - they'll receive stream)
+    const videoPlayerContainer = this.root.querySelector('#video-player-container');
+    if (videoPlayerContainer) {
+      try {
+        // Import VideoPlayer dynamically to avoid circular dependencies
+        const { VideoPlayer } = await import('./VideoPlayer.js');
+        
+        this.videoPlayer = new VideoPlayer(
+          this.socketClient,
+          (state) => this.handleVideoStateChange(state)
+        );
+        
+        // For participants, we create a placeholder video element that will be controlled by the host
+        this.videoPlayer.initializeAsParticipant(videoPlayerContainer, movieState);
+        
+        console.log('✅ Participant video player initialized');
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize participant video player:', error);
+        this.movieState = 'error';
+        this.updateMovieStage();
+      }
+    }
+  }
+
+  /**
+   * Handle host play/pause/seek events
+   */
+  handleHostPlay(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('▶️ Host ignoring own play event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('▶️ Participant syncing with host play');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('play', syncState);
+  }
+
+  handleHostPause(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏸️ Host ignoring own pause event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏸️ Participant syncing with host pause');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('pause', syncState);
+  }
+
+  handleHostSeek(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏩ Host ignoring own seek event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏩ Participant syncing with host seek to:', movieState.currentTime);
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('seek', syncState);
+  }
+
+  handleHostStoppedStreaming() {
+    console.log('⏹️ Host stopped streaming');
+    
+    // Stop video streaming if host
+    if (this.isHost) {
+      this.stopVideoStreaming();
+    }
+    
+    // Reset movie state
+    this.selectedMovie = null;
+    this.movieState = 'none';
+    
+    // Clean up video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+    
+    // Update UI back to waiting state
+    this.updateMovieStage();
+  }
+
+  renderMovieStage() {
+    // Set initial movie state
+    if (this.movieState === 'none') {
+      this.movieState = 'selecting';
+    }
+    
+    return `<div class="movie-stage" id="movie-stage"></div>`;
+  }
+  
+  /**
+   * Handle leave room request with confirmation
+   */
+  async handleLeaveRoom() {
+    // Show confirmation dialog
+    const confirmed = await this.showLeaveConfirmation();
+    if (!confirmed) return;
+
+    console.log('🚪 User initiated hard leave...');
+
+    try {
+      // Show loading state on leave button
+      const leaveBtn = this.root.querySelector('#leave-room');
+      if (leaveBtn) {
+        leaveBtn.disabled = true;
+        leaveBtn.innerHTML = '<span class="leave-icon">⏳</span>Leaving...';
+      }
+
+      // Emit leave room event to server
+      this.socketClient.emit('leave-room');
+      
+      // Listen for server confirmation
+      this.socketClient.on('room-left', (data) => {
+        console.log('✅ Server confirmed room left:', data);
+        this.performHardLeave();
+      });
+
+      // Also handle errors
+      this.socketClient.on('leave-room-error', (error) => {
+        console.error('❌ Leave room error:', error);
+        // Still perform hard leave even if server error
+        this.performHardLeave();
+      });
+
+      // Fallback timeout - perform hard leave anyway after 3 seconds
+      setTimeout(() => {
+        console.log('⏰ Leave timeout - performing hard leave anyway');
+        this.performHardLeave();
+      }, 3000);
+
+    } catch (error) {
+      console.error('❌ Error during leave process:', error);
+      // Still perform hard leave on error
+      this.performHardLeave();
+    }
+  }
+
+  /**
+   * Show leave confirmation dialog
+   */
+  async showLeaveConfirmation() {
+    return new Promise((resolve) => {
+      // Create confirmation modal
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay leave-confirmation-modal';
+      modal.innerHTML = `
+        <div class="modal-content" role="dialog" aria-labelledby="leave-title" aria-modal="true">
+          <div class="modal-header">
+            <h3 id="leave-title">🚪 Leave Room</h3>
+          </div>
+          <div class="modal-body">
+            <p><strong>Are you sure you want to leave?</strong></p>
+            <ul style="margin: 10px 0; padding-left: 20px; color: #666;">
+              <li>You'll be disconnected from the movie party</li>
+              <li>Your session will be completely cleared</li>
+              <li>You'll need to rejoin manually if you want to come back</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-leave">Cancel</button>
+            <button class="btn btn-danger" id="confirm-leave">
+              <span>🚪</span> Leave Room
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Handle confirmation
+      const confirmBtn = modal.querySelector('#confirm-leave');
+      const cancelBtn = modal.querySelector('#cancel-leave');
+
+      const cleanup = () => {
+        modal.remove();
+      };
+
+      confirmBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // ESC key and overlay click to cancel
+      const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+          cleanup();
+          resolve(false);
+          document.removeEventListener('keydown', handleEscape);
+        }
+      };
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleEscape);
+
+      // Focus the cancel button by default
+      setTimeout(() => cancelBtn.focus(), 100);
+    });
+  }
+
+  /**
+   * Perform complete hard leave - clear everything and go to landing
+   */
+  performHardLeave() {
+    console.log('🧹 Performing hard leave - clearing all data...');
+
+    // Stop all ongoing activities
+    this.cleanup();
+
+    // Clear all local storage related to BeeMoo
+    try {
+      localStorage.removeItem('beemoo-room-session');
+      localStorage.removeItem('beemoo-user-preferences');
+      localStorage.removeItem('beemoo-audio-settings');
+      // Clear any other BeeMoo related storage
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          localStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared local storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some local storage:', error);
+    }
+
+    // Clear session storage too
+    try {
+      sessionStorage.removeItem('beemoo-room-session');
+      const keys = Object.keys(sessionStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared session storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some session storage:', error);
+    }
+
+    // Disconnect from socket completely
+    if (this.socketClient) {
+      this.socketClient.disconnect();
+      console.log('✅ Disconnected from socket');
+    }
+
+    // Navigate back to landing page
+    this.navigateToLanding();
+  }
+
+  /**
+   * Navigate back to landing page with fresh state
+   */
+  navigateToLanding() {
+    console.log('🏠 Navigating to landing page...');
+
+    // Emit leave event for parent app
+    this.emit('leave-room', { 
+      reason: 'user-initiated',
+      hardLeave: true 
+    });
+
+    // Fallback: manually reload page if parent doesn't handle the event
+    setTimeout(() => {
+      console.log('🔄 Fallback: Reloading page to ensure clean state');
+      window.location.href = window.location.origin;
+    }, 1000);
+  }
+
+  /**
+   * Cleanup all resources and connections
+   */
+  cleanup() {
+    console.log('🧹 Cleaning up RoomView resources...');
+
+    // Stop video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+
+    // Stop peer manager and WebRTC connections
+    if (this.peerManager) {
+      this.peerManager.destroy();
+      this.peerManager = null;
+    }
+
+    // Stop voice chat
+    if (this.voiceActive) {
+      this.stopVoice();
+    }
+
+    // Clean up participant list
+    if (this.participantList) {
+      this.participantList.destroy();
+    }
+
+    // Clear participants map
+    this.participants.clear();
+
+    // Remove all socket event listeners related to room
+    if (this.socketClient) {
+      this.socketClient.off('participant-joined');
+      this.socketClient.off('participant-left');
+      this.socketClient.off('participant-disconnected');
+      this.socketClient.off('host-disconnected');
+      this.socketClient.off('room-deleted');
+      this.socketClient.off('movie-state-updated');
+      this.socketClient.off('movie-control');
+      this.socketClient.off('mic-status-updated');
+      this.socketClient.off('room-left');
+      this.socketClient.off('leave-room-error');
+    }
+
+    // Stop any ongoing timers or intervals
+    if (this.videoSyncInterval) {
+      clearInterval(this.videoSyncInterval);
+      this.videoSyncInterval = null;
+    }
+
+    console.log('✅ RoomView cleanup complete');
+  }
+
+  /**
+   * Handle movie synchronization from host
+   */
+  async handleMovieSync(data) {
+    const { action, movieState } = data;
+    
+    console.log('🎬 Processing movie sync:', { action, movieState });
+    
+    switch (action) {
+      case 'start-streaming':
+        await this.handleHostStartedStreaming(movieState);
+        break;
+
+      case 'play':
+        this.handleHostPlay(movieState);
+        break;
+
+      case 'pause':
+        this.handleHostPause(movieState);
+        break;
+
+      case 'seek':
+        this.handleHostSeek(movieState);
+        break;
+
+      case 'stop-streaming':
+        this.handleHostStoppedStreaming();
+        break;
+
+      case 'sync':
+        // Host should NOT process their own sync events
+        if (this.isHost) {
+          console.log('🔄 Host ignoring own sync event (no self-sync needed)');
+          return;
+        }
+        
+        // For participants only: update playback state - DO NOT reinitialize video player
+        console.log('🔄 Participant processing sync from host');
+        
+        if (this.videoPlayer && movieState) {
+          // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
+          this.videoPlayer.syncWithHost('seek', movieState);
+          
+          // Then apply play/pause state
+          if (movieState.isPlaying) {
+            this.videoPlayer.syncWithHost('play', movieState);
+          } else {
+            this.videoPlayer.syncWithHost('pause', movieState);
+          }
+        } else if (!this.videoPlayer) {
+          // Only if video player doesn't exist (new participant), then initialize
+          console.log('🎬 New participant - initializing video player for sync');
+          await this.handleHostStartedStreaming(movieState);
+        }
+        break;
+
+      default:
+        console.warn('Unknown movie sync action:', action);
+    }
+  }
+
+  /**
+   * Handle when host starts streaming (participants see video player)
+   */
+  async handleHostStartedStreaming(movieState) {
+    if (this.isHost) return; // Host already has the video player
+    
+    console.log('🎬 Host started streaming, transitioning from waiting screen to video player');
+    
+    // Update movie state
+    this.selectedMovie = {
+      name: movieState.title || 'Unknown Movie',
+      type: movieState.type || 'video/mp4',
+      size: movieState.size || 0
+    };
+    this.movieState = 'ready';
+    
+    // Update UI to show video player container
+    this.updateMovieStage();
+    
+    // Initialize video player for participant (but without file - they'll receive stream)
+    const videoPlayerContainer = this.root.querySelector('#video-player-container');
+    if (videoPlayerContainer) {
+      try {
+        // Import VideoPlayer dynamically to avoid circular dependencies
+        const { VideoPlayer } = await import('./VideoPlayer.js');
+        
+        this.videoPlayer = new VideoPlayer(
+          this.socketClient,
+          (state) => this.handleVideoStateChange(state)
+        );
+        
+        // For participants, we create a placeholder video element that will be controlled by the host
+        this.videoPlayer.initializeAsParticipant(videoPlayerContainer, movieState);
+        
+        console.log('✅ Participant video player initialized');
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize participant video player:', error);
+        this.movieState = 'error';
+        this.updateMovieStage();
+      }
+    }
+  }
+
+  /**
+   * Handle host play/pause/seek events
+   */
+  handleHostPlay(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('▶️ Host ignoring own play event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('▶️ Participant syncing with host play');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('play', syncState);
+  }
+
+  handleHostPause(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏸️ Host ignoring own pause event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏸️ Participant syncing with host pause');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('pause', syncState);
+  }
+
+  handleHostSeek(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏩ Host ignoring own seek event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏩ Participant syncing with host seek to:', movieState.currentTime);
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('seek', syncState);
+  }
+
+  handleHostStoppedStreaming() {
+    console.log('⏹️ Host stopped streaming');
+    
+    // Stop video streaming if host
+    if (this.isHost) {
+      this.stopVideoStreaming();
+    }
+    
+    // Reset movie state
+    this.selectedMovie = null;
+    this.movieState = 'none';
+    
+    // Clean up video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+    
+    // Update UI back to waiting state
+    this.updateMovieStage();
+  }
+
+  renderMovieStage() {
+    // Set initial movie state
+    if (this.movieState === 'none') {
+      this.movieState = 'selecting';
+    }
+    
+    return `<div class="movie-stage" id="movie-stage"></div>`;
+  }
+  
+  /**
+   * Handle leave room request with confirmation
+   */
+  async handleLeaveRoom() {
+    // Show confirmation dialog
+    const confirmed = await this.showLeaveConfirmation();
+    if (!confirmed) return;
+
+    console.log('🚪 User initiated hard leave...');
+
+    try {
+      // Show loading state on leave button
+      const leaveBtn = this.root.querySelector('#leave-room');
+      if (leaveBtn) {
+        leaveBtn.disabled = true;
+        leaveBtn.innerHTML = '<span class="leave-icon">⏳</span>Leaving...';
+      }
+
+      // Emit leave room event to server
+      this.socketClient.emit('leave-room');
+      
+      // Listen for server confirmation
+      this.socketClient.on('room-left', (data) => {
+        console.log('✅ Server confirmed room left:', data);
+        this.performHardLeave();
+      });
+
+      // Also handle errors
+      this.socketClient.on('leave-room-error', (error) => {
+        console.error('❌ Leave room error:', error);
+        // Still perform hard leave even if server error
+        this.performHardLeave();
+      });
+
+      // Fallback timeout - perform hard leave anyway after 3 seconds
+      setTimeout(() => {
+        console.log('⏰ Leave timeout - performing hard leave anyway');
+        this.performHardLeave();
+      }, 3000);
+
+    } catch (error) {
+      console.error('❌ Error during leave process:', error);
+      // Still perform hard leave on error
+      this.performHardLeave();
+    }
+  }
+
+  /**
+   * Show leave confirmation dialog
+   */
+  async showLeaveConfirmation() {
+    return new Promise((resolve) => {
+      // Create confirmation modal
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay leave-confirmation-modal';
+      modal.innerHTML = `
+        <div class="modal-content" role="dialog" aria-labelledby="leave-title" aria-modal="true">
+          <div class="modal-header">
+            <h3 id="leave-title">🚪 Leave Room</h3>
+          </div>
+          <div class="modal-body">
+            <p><strong>Are you sure you want to leave?</strong></p>
+            <ul style="margin: 10px 0; padding-left: 20px; color: #666;">
+              <li>You'll be disconnected from the movie party</li>
+              <li>Your session will be completely cleared</li>
+              <li>You'll need to rejoin manually if you want to come back</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-leave">Cancel</button>
+            <button class="btn btn-danger" id="confirm-leave">
+              <span>🚪</span> Leave Room
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Handle confirmation
+      const confirmBtn = modal.querySelector('#confirm-leave');
+      const cancelBtn = modal.querySelector('#cancel-leave');
+
+      const cleanup = () => {
+        modal.remove();
+      };
+
+      confirmBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // ESC key and overlay click to cancel
+      const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+          cleanup();
+          resolve(false);
+          document.removeEventListener('keydown', handleEscape);
+        }
+      };
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleEscape);
+
+      // Focus the cancel button by default
+      setTimeout(() => cancelBtn.focus(), 100);
+    });
+  }
+
+  /**
+   * Perform complete hard leave - clear everything and go to landing
+   */
+  performHardLeave() {
+    console.log('🧹 Performing hard leave - clearing all data...');
+
+    // Stop all ongoing activities
+    this.cleanup();
+
+    // Clear all local storage related to BeeMoo
+    try {
+      localStorage.removeItem('beemoo-room-session');
+      localStorage.removeItem('beemoo-user-preferences');
+      localStorage.removeItem('beemoo-audio-settings');
+      // Clear any other BeeMoo related storage
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          localStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared local storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some local storage:', error);
+    }
+
+    // Clear session storage too
+    try {
+      sessionStorage.removeItem('beemoo-room-session');
+      const keys = Object.keys(sessionStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared session storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some session storage:', error);
+    }
+
+    // Disconnect from socket completely
+    if (this.socketClient) {
+      this.socketClient.disconnect();
+      console.log('✅ Disconnected from socket');
+    }
+
+    // Navigate back to landing page
+    this.navigateToLanding();
+  }
+
+  /**
+   * Navigate back to landing page with fresh state
+   */
+  navigateToLanding() {
+    console.log('🏠 Navigating to landing page...');
+
+    // Emit leave event for parent app
+    this.emit('leave-room', { 
+      reason: 'user-initiated',
+      hardLeave: true 
+    });
+
+    // Fallback: manually reload page if parent doesn't handle the event
+    setTimeout(() => {
+      console.log('🔄 Fallback: Reloading page to ensure clean state');
+      window.location.href = window.location.origin;
+    }, 1000);
+  }
+
+  /**
+   * Cleanup all resources and connections
+   */
+  cleanup() {
+    console.log('🧹 Cleaning up RoomView resources...');
+
+    // Stop video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+
+    // Stop peer manager and WebRTC connections
+    if (this.peerManager) {
+      this.peerManager.destroy();
+      this.peerManager = null;
+    }
+
+    // Stop voice chat
+    if (this.voiceActive) {
+      this.stopVoice();
+    }
+
+    // Clean up participant list
+    if (this.participantList) {
+      this.participantList.destroy();
+    }
+
+    // Clear participants map
+    this.participants.clear();
+
+    // Remove all socket event listeners related to room
+    if (this.socketClient) {
+      this.socketClient.off('participant-joined');
+      this.socketClient.off('participant-left');
+      this.socketClient.off('participant-disconnected');
+      this.socketClient.off('host-disconnected');
+      this.socketClient.off('room-deleted');
+      this.socketClient.off('movie-state-updated');
+      this.socketClient.off('movie-control');
+      this.socketClient.off('mic-status-updated');
+      this.socketClient.off('room-left');
+      this.socketClient.off('leave-room-error');
+    }
+
+    // Stop any ongoing timers or intervals
+    if (this.videoSyncInterval) {
+      clearInterval(this.videoSyncInterval);
+      this.videoSyncInterval = null;
+    }
+
+    console.log('✅ RoomView cleanup complete');
+  }
+
+  /**
+   * Handle movie synchronization from host
+   */
+  async handleMovieSync(data) {
+    const { action, movieState } = data;
+    
+    console.log('🎬 Processing movie sync:', { action, movieState });
+    
+    switch (action) {
+      case 'start-streaming':
+        await this.handleHostStartedStreaming(movieState);
+        break;
+
+      case 'play':
+        this.handleHostPlay(movieState);
+        break;
+
+      case 'pause':
+        this.handleHostPause(movieState);
+        break;
+
+      case 'seek':
+        this.handleHostSeek(movieState);
+        break;
+
+      case 'stop-streaming':
+        this.handleHostStoppedStreaming();
+        break;
+
+      case 'sync':
+        // Host should NOT process their own sync events
+        if (this.isHost) {
+          console.log('🔄 Host ignoring own sync event (no self-sync needed)');
+          return;
+        }
+        
+        // For participants only: update playback state - DO NOT reinitialize video player
+        console.log('🔄 Participant processing sync from host');
+        
+        if (this.videoPlayer && movieState) {
+          // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
+          this.videoPlayer.syncWithHost('seek', movieState);
+          
+          // Then apply play/pause state
+          if (movieState.isPlaying) {
+            this.videoPlayer.syncWithHost('play', movieState);
+          } else {
+            this.videoPlayer.syncWithHost('pause', movieState);
+          }
+        } else if (!this.videoPlayer) {
+          // Only if video player doesn't exist (new participant), then initialize
+          console.log('🎬 New participant - initializing video player for sync');
+          await this.handleHostStartedStreaming(movieState);
+        }
+        break;
+
+      default:
+        console.warn('Unknown movie sync action:', action);
+    }
+  }
+
+  /**
+   * Handle when host starts streaming (participants see video player)
+   */
+  async handleHostStartedStreaming(movieState) {
+    if (this.isHost) return; // Host already has the video player
+    
+    console.log('🎬 Host started streaming, transitioning from waiting screen to video player');
+    
+    // Update movie state
+    this.selectedMovie = {
+      name: movieState.title || 'Unknown Movie',
+      type: movieState.type || 'video/mp4',
+      size: movieState.size || 0
+    };
+    this.movieState = 'ready';
+    
+    // Update UI to show video player container
+    this.updateMovieStage();
+    
+    // Initialize video player for participant (but without file - they'll receive stream)
+    const videoPlayerContainer = this.root.querySelector('#video-player-container');
+    if (videoPlayerContainer) {
+      try {
+        // Import VideoPlayer dynamically to avoid circular dependencies
+        const { VideoPlayer } = await import('./VideoPlayer.js');
+        
+        this.videoPlayer = new VideoPlayer(
+          this.socketClient,
+          (state) => this.handleVideoStateChange(state)
+        );
+        
+        // For participants, we create a placeholder video element that will be controlled by the host
+        this.videoPlayer.initializeAsParticipant(videoPlayerContainer, movieState);
+        
+        console.log('✅ Participant video player initialized');
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize participant video player:', error);
+        this.movieState = 'error';
+        this.updateMovieStage();
+      }
+    }
+  }
+
+  /**
+   * Handle host play/pause/seek events
+   */
+  handleHostPlay(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('▶️ Host ignoring own play event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('▶️ Participant syncing with host play');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('play', syncState);
+  }
+
+  handleHostPause(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏸️ Host ignoring own pause event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏸️ Participant syncing with host pause');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('pause', syncState);
+  }
+
+  handleHostSeek(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏩ Host ignoring own seek event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏩ Participant syncing with host seek to:', movieState.currentTime);
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('seek', syncState);
+  }
+
+  handleHostStoppedStreaming() {
+    console.log('⏹️ Host stopped streaming');
+    
+    // Stop video streaming if host
+    if (this.isHost) {
+      this.stopVideoStreaming();
+    }
+    
+    // Reset movie state
+    this.selectedMovie = null;
+    this.movieState = 'none';
+    
+    // Clean up video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+    
+    // Update UI back to waiting state
+    this.updateMovieStage();
+  }
+
+  renderMovieStage() {
+    // Set initial movie state
+    if (this.movieState === 'none') {
+      this.movieState = 'selecting';
+    }
+    
+    return `<div class="movie-stage" id="movie-stage"></div>`;
+  }
+  
+  /**
+   * Handle leave room request with confirmation
+   */
+  async handleLeaveRoom() {
+    // Show confirmation dialog
+    const confirmed = await this.showLeaveConfirmation();
+    if (!confirmed) return;
+
+    console.log('🚪 User initiated hard leave...');
+
+    try {
+      // Show loading state on leave button
+      const leaveBtn = this.root.querySelector('#leave-room');
+      if (leaveBtn) {
+        leaveBtn.disabled = true;
+        leaveBtn.innerHTML = '<span class="leave-icon">⏳</span>Leaving...';
+      }
+
+      // Emit leave room event to server
+      this.socketClient.emit('leave-room');
+      
+      // Listen for server confirmation
+      this.socketClient.on('room-left', (data) => {
+        console.log('✅ Server confirmed room left:', data);
+        this.performHardLeave();
+      });
+
+      // Also handle errors
+      this.socketClient.on('leave-room-error', (error) => {
+        console.error('❌ Leave room error:', error);
+        // Still perform hard leave even if server error
+        this.performHardLeave();
+      });
+
+      // Fallback timeout - perform hard leave anyway after 3 seconds
+      setTimeout(() => {
+        console.log('⏰ Leave timeout - performing hard leave anyway');
+        this.performHardLeave();
+      }, 3000);
+
+    } catch (error) {
+      console.error('❌ Error during leave process:', error);
+      // Still perform hard leave on error
+      this.performHardLeave();
+    }
+  }
+
+  /**
+   * Show leave confirmation dialog
+   */
+  async showLeaveConfirmation() {
+    return new Promise((resolve) => {
+      // Create confirmation modal
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay leave-confirmation-modal';
+      modal.innerHTML = `
+        <div class="modal-content" role="dialog" aria-labelledby="leave-title" aria-modal="true">
+          <div class="modal-header">
+            <h3 id="leave-title">🚪 Leave Room</h3>
+          </div>
+          <div class="modal-body">
+            <p><strong>Are you sure you want to leave?</strong></p>
+            <ul style="margin: 10px 0; padding-left: 20px; color: #666;">
+              <li>You'll be disconnected from the movie party</li>
+              <li>Your session will be completely cleared</li>
+              <li>You'll need to rejoin manually if you want to come back</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-leave">Cancel</button>
+            <button class="btn btn-danger" id="confirm-leave">
+              <span>🚪</span> Leave Room
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Handle confirmation
+      const confirmBtn = modal.querySelector('#confirm-leave');
+      const cancelBtn = modal.querySelector('#cancel-leave');
+
+      const cleanup = () => {
+        modal.remove();
+      };
+
+      confirmBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // ESC key and overlay click to cancel
+      const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+          cleanup();
+          resolve(false);
+          document.removeEventListener('keydown', handleEscape);
+        }
+      };
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleEscape);
+
+      // Focus the cancel button by default
+      setTimeout(() => cancelBtn.focus(), 100);
+    });
+  }
+
+  /**
+   * Perform complete hard leave - clear everything and go to landing
+   */
+  performHardLeave() {
+    console.log('🧹 Performing hard leave - clearing all data...');
+
+    // Stop all ongoing activities
+    this.cleanup();
+
+    // Clear all local storage related to BeeMoo
+    try {
+      localStorage.removeItem('beemoo-room-session');
+      localStorage.removeItem('beemoo-user-preferences');
+      localStorage.removeItem('beemoo-audio-settings');
+      // Clear any other BeeMoo related storage
+      const keys = Object.keys(localStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          localStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared local storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some local storage:', error);
+    }
+
+    // Clear session storage too
+    try {
+      sessionStorage.removeItem('beemoo-room-session');
+      const keys = Object.keys(sessionStorage);
+      keys.forEach(key => {
+        if (key.startsWith('beemoo-')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      console.log('✅ Cleared session storage');
+    } catch (error) {
+      console.warn('⚠️ Failed to clear some session storage:', error);
+    }
+
+    // Disconnect from socket completely
+    if (this.socketClient) {
+      this.socketClient.disconnect();
+      console.log('✅ Disconnected from socket');
+    }
+
+    // Navigate back to landing page
+    this.navigateToLanding();
+  }
+
+  /**
+   * Navigate back to landing page with fresh state
+   */
+  navigateToLanding() {
+    console.log('🏠 Navigating to landing page...');
+
+    // Emit leave event for parent app
+    this.emit('leave-room', { 
+      reason: 'user-initiated',
+      hardLeave: true 
+    });
+
+    // Fallback: manually reload page if parent doesn't handle the event
+    setTimeout(() => {
+      console.log('🔄 Fallback: Reloading page to ensure clean state');
+      window.location.href = window.location.origin;
+    }, 1000);
+  }
+
+  /**
+   * Cleanup all resources and connections
+   */
+  cleanup() {
+    console.log('🧹 Cleaning up RoomView resources...');
+
+    // Stop video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+
+    // Stop peer manager and WebRTC connections
+    if (this.peerManager) {
+      this.peerManager.destroy();
+      this.peerManager = null;
+    }
+
+    // Stop voice chat
+    if (this.voiceActive) {
+      this.stopVoice();
+    }
+
+    // Clean up participant list
+    if (this.participantList) {
+      this.participantList.destroy();
+    }
+
+    // Clear participants map
+    this.participants.clear();
+
+    // Remove all socket event listeners related to room
+    if (this.socketClient) {
+      this.socketClient.off('participant-joined');
+      this.socketClient.off('participant-left');
+      this.socketClient.off('participant-disconnected');
+      this.socketClient.off('host-disconnected');
+      this.socketClient.off('room-deleted');
+      this.socketClient.off('movie-state-updated');
+      this.socketClient.off('movie-control');
+      this.socketClient.off('mic-status-updated');
+      this.socketClient.off('room-left');
+      this.socketClient.off('leave-room-error');
+    }
+
+    // Stop any ongoing timers or intervals
+    if (this.videoSyncInterval) {
+      clearInterval(this.videoSyncInterval);
+      this.videoSyncInterval = null;
+    }
+
+    console.log('✅ RoomView cleanup complete');
+  }
+
+  /**
+   * Handle movie synchronization from host
+   */
+  async handleMovieSync(data) {
+    const { action, movieState } = data;
+    
+    console.log('🎬 Processing movie sync:', { action, movieState });
+    
+    switch (action) {
+      case 'start-streaming':
+        await this.handleHostStartedStreaming(movieState);
+        break;
+
+      case 'play':
+        this.handleHostPlay(movieState);
+        break;
+
+      case 'pause':
+        this.handleHostPause(movieState);
+        break;
+
+      case 'seek':
+        this.handleHostSeek(movieState);
+        break;
+
+      case 'stop-streaming':
+        this.handleHostStoppedStreaming();
+        break;
+
+      case 'sync':
+        // Host should NOT process their own sync events
+        if (this.isHost) {
+          console.log('🔄 Host ignoring own sync event (no self-sync needed)');
+          return;
+        }
+        
+        // For participants only: update playback state - DO NOT reinitialize video player
+        console.log('🔄 Participant processing sync from host');
+        
+        if (this.videoPlayer && movieState) {
+          // Use the existing syncWithHost method which handles WebRTC vs virtual mode correctly
+          this.videoPlayer.syncWithHost('seek', movieState);
+          
+          // Then apply play/pause state
+          if (movieState.isPlaying) {
+            this.videoPlayer.syncWithHost('play', movieState);
+          } else {
+            this.videoPlayer.syncWithHost('pause', movieState);
+          }
+        } else if (!this.videoPlayer) {
+          // Only if video player doesn't exist (new participant), then initialize
+          console.log('🎬 New participant - initializing video player for sync');
+          await this.handleHostStartedStreaming(movieState);
+        }
+        break;
+
+      default:
+        console.warn('Unknown movie sync action:', action);
+    }
+  }
+
+  /**
+   * Handle when host starts streaming (participants see video player)
+   */
+  async handleHostStartedStreaming(movieState) {
+    if (this.isHost) return; // Host already has the video player
+    
+    console.log('🎬 Host started streaming, transitioning from waiting screen to video player');
+    
+    // Update movie state
+    this.selectedMovie = {
+      name: movieState.title || 'Unknown Movie',
+      type: movieState.type || 'video/mp4',
+      size: movieState.size || 0
+    };
+    this.movieState = 'ready';
+    
+    // Update UI to show video player container
+    this.updateMovieStage();
+    
+    // Initialize video player for participant (but without file - they'll receive stream)
+    const videoPlayerContainer = this.root.querySelector('#video-player-container');
+    if (videoPlayerContainer) {
+      try {
+        // Import VideoPlayer dynamically to avoid circular dependencies
+        const { VideoPlayer } = await import('./VideoPlayer.js');
+        
+        this.videoPlayer = new VideoPlayer(
+          this.socketClient,
+          (state) => this.handleVideoStateChange(state)
+        );
+        
+        // For participants, we create a placeholder video element that will be controlled by the host
+        this.videoPlayer.initializeAsParticipant(videoPlayerContainer, movieState);
+        
+        console.log('✅ Participant video player initialized');
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize participant video player:', error);
+        this.movieState = 'error';
+        this.updateMovieStage();
+      }
+    }
+  }
+
+  /**
+   * Handle host play/pause/seek events
+   */
+  handleHostPlay(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('▶️ Host ignoring own play event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('▶️ Participant syncing with host play');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('play', syncState);
+  }
+
+  handleHostPause(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏸️ Host ignoring own pause event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏸️ Participant syncing with host pause');
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('pause', syncState);
+  }
+
+  handleHostSeek(movieState) {
+    if (!this.videoPlayer) return;
+    
+    // Host should NOT sync with themselves - these events are FOR participants only
+    if (this.isHost) {
+      console.log('⏩ Host ignoring own seek event (no self-sync needed)');
+      return;
+    }
+    
+    console.log('⏩ Participant syncing with host seek to:', movieState.currentTime);
+    
+    // Ensure movie title is included for sync display
+    const syncState = {
+      ...movieState,
+      title: movieState.title || this.selectedMovie?.name || 'Unknown Movie'
+    };
+    
+    this.videoPlayer.syncWithHost('seek', syncState);
+  }
+
+  handleHostStoppedStreaming() {
+    console.log('⏹️ Host stopped streaming');
+    
+    // Stop video streaming if host
+    if (this.isHost) {
+      this.stopVideoStreaming();
+    }
+    
+    // Reset movie state
+    this.selectedMovie = null;
+    this.movieState = 'none';
+    
+    // Clean up video player
+    if (this.videoPlayer) {
+      this.videoPlayer.destroy();
+      this.videoPlayer = null;
+    }
+    
+    // Update UI back to waiting state
+    this.updateMovieStage();
+  }
+
+  renderMovieStage() {
+    // Set initial movie state
+    if (this.movieState === 'none') {
+      this.movieState = 'selecting';
+    }
+    
+    return `<div class="movie-stage" id="movie-stage"></div>`;
+  }
+  
+  /**
+   * Handle leave room request with confirmation
+   */
+  async handleLeaveRoom() {
+    // Show confirmation dialog
+    const confirmed = await this.showLeaveConfirmation();
+    if (!confirmed) return;
+
+    console.log('🚪 User initiated hard leave...');
+
+    try {
+      // Show loading state on leave button
+      const leaveBtn = this.root.querySelector('#leave-room');
+      if (leaveBtn) {
+        leaveBtn.disabled = true;
+        leaveBtn.innerHTML = '<span class="leave-icon">⏳</span>Leaving...';
+      }
+
+      // Emit leave room event to server
+      this.socketClient.emit('leave-room');
+      
+      // Listen for server confirmation
+      this.socketClient.on('room-left', (data) => {
+        console.log('✅ Server confirmed room left:', data);
+        this.performHardLeave();
+      });
+
+      // Also handle errors
+      this.socketClient.on('leave-room-error', (error) => {
+        console.error('❌ Leave room error:', error);
+        // Still perform hard leave even if server error
+        this.performHardLeave();
+      });
+
+      // Fallback timeout - perform hard leave anyway after 3 seconds
+      setTimeout(() => {
+        console.log('⏰ Leave timeout - performing hard leave anyway');
+        this.performHardLeave();
+      }, 3000);
+
+    } catch (error) {
+      console.error('❌ Error during leave process:', error);
+      // Still perform hard leave on error
+      this.performHardLeave();
+    }
+  }
+
+  /**
+   * Show leave confirmation dialog
+   */
+  async showLeaveConfirmation() {
+    return new Promise((resolve) => {
+      // Create confirmation modal
+      const modal = document.createElement('div');
+      modal.className = 'modal-overlay leave-confirmation-modal';
+      modal.innerHTML = `
+        <div class="modal-content" role="dialog" aria-labelledby="leave-title" aria-modal="true">
+          <div class="modal-header">
+            <h3 id="leave-title">🚪 Leave Room</h3>
+          </div>
+          <div class="modal-body">
+            <p><strong>Are you sure you want to leave?</strong></p>
+            <ul style="margin: 10px 0; padding-left: 20px; color: #666;">
+              <li>You'll be disconnected from the movie party</li>
+              <li>Your session will be completely cleared</li>
+              <li>You'll need to rejoin manually if you want to come back</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-leave">Cancel</button>
+            <button class="btn btn-danger" id="confirm-leave">
+              <span>🚪</span> Leave Room
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Handle confirmation
+      const confirmBtn = modal.querySelector('#confirm-leave');
+      const cancelBtn = modal.querySelector('#cancel-leave');
+
+      const cleanup = () => {
+        modal.remove();
+      };
+
+      confirmBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(true);
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+
+      // ESC key and overlay click to cancel
+      const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+          cleanup();
+          resolve(false);
+          document.removeEventListener('keydown', handleEscape);
+        }
+      };
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      });
+
+      document.addEventListener('keydown', handleEscape);
+
+      // Focus the cancel button by default
+      setTimeout(() => cancelBtn.focus(), 100);
+    });
+  }
+
+  /**
+   * Perform complete hard leave - clear everything and go to landing
+   */
+  performHardLeave() {
+    console.log('🧹 Performing hard leave - clearing all data...');
+
+    // Stop all ongoing activities
