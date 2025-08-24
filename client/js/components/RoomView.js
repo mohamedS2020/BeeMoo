@@ -164,13 +164,25 @@ export class RoomView {
     this.peerManager.onRemoteVideoTrack = (peerId, stream) => {
       console.log(`🎥 Received video stream from peer ${peerId}`);
 
-      // If I'm a participant and this is from the host, store video stream and attach combined stream
+      // If I'm a participant and this is from the host, use the video stream directly
       const hostPeerId = this.getHostPeerId();
       const isFromHost = !!hostPeerId && peerId === hostPeerId;
       if (!this.isHost && isFromHost) {
-        this.remoteHostVideoStream = stream;
-        // Combine host video with any host audio streams (mic) and attach
-        this.combineAndAttachHostStreamsIfReady();
+        console.log(`🎥 Participant received host video stream - attaching directly`);
+        if (this.videoPlayer && this.videoPlayer.videoElement) {
+          // Exit virtual mode if needed
+          if (typeof this.videoPlayer.exitVirtualMode === 'function') {
+            this.videoPlayer.exitVirtualMode();
+          }
+          
+          // Attach video stream directly to video element
+          this.videoPlayer.videoElement.srcObject = stream;
+          this.videoPlayer.videoElement.autoplay = true;
+          this.videoPlayer.videoElement.playsInline = true;
+          this.videoPlayer.videoElement.setAttribute('data-webrtc', 'true');
+          
+          console.log(`✅ Participant video stream attached directly`);
+        }
         return;
       }
 
@@ -314,6 +326,16 @@ export class RoomView {
         
         this.movieState = 'ready';
         console.log('✅ Video player initialized successfully');
+        
+        // Prepare video for streaming via state manager
+        if (this.isHost && this.peerManager) {
+          const prepResult = await this.peerManager.prepareVideoStreaming(this.videoPlayer.videoElement);
+          if (prepResult.success) {
+            console.log('🎬 Video prepared for streaming via state manager');
+          } else {
+            console.warn('⚠️ Failed to prepare video for streaming:', prepResult.error);
+          }
+        }
         
         // Wait for video metadata to load before notifying server
         await this.waitForVideoMetadata();
@@ -580,24 +602,30 @@ export class RoomView {
   }
 
   async applyAudioSettings() {
-    const select = this.root.querySelector('#mic-device');
-    const aec = this.root.querySelector('#aec')?.checked;
-    const ns = this.root.querySelector('#ns')?.checked;
-    const agc = this.root.querySelector('#agc')?.checked;
-    const deviceId = select?.value || undefined;
-
-    try {
-      const constraints = WebRTCUtils.getAudioConstraints({
-        echoCancellation: aec,
-        noiseSuppression: ns,
-        autoGainControl: agc,
-        deviceId
-      });
-      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-      await this.peerManager.replaceLocalStream(newStream);
-    } catch (e) {
-      alert('Failed to apply audio settings. Check permissions and try again.');
-    }
+    // DISABLED: This function was causing host voice to disappear during video streaming
+    console.warn('⚠️ Audio settings changes disabled to prevent host voice issues');
+    console.warn('⚠️ Restart the voice chat if you need to change audio settings');
+    return;
+    
+    // Original code commented out to prevent track replacement issues:
+    // const select = this.root.querySelector('#mic-device');
+    // const aec = this.root.querySelector('#aec')?.checked;
+    // const ns = this.root.querySelector('#ns')?.checked;
+    // const agc = this.root.querySelector('#agc')?.checked;
+    // const deviceId = select?.value || undefined;
+    //
+    // try {
+    //   const constraints = WebRTCUtils.getAudioConstraints({
+    //     echoCancellation: aec,
+    //     noiseSuppression: ns,
+    //     autoGainControl: agc,
+    //     deviceId
+    //   });
+    //   const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+    //   await this.peerManager.replaceLocalStream(newStream);
+    // } catch (e) {
+    //   alert('Failed to apply audio settings. Check permissions and try again.');
+    // }
   }
 
   async startVoice() {
@@ -909,32 +937,54 @@ export class RoomView {
         // Continue anyway - peers might connect later
       }
 
-      // Ensure host video element has audio enabled for streaming
+      // Check current streaming state before starting
+      const currentState = this.peerManager.getStreamingState();
+      console.log('🔍 Current streaming state before starting:', currentState);
+      
+      if (!this.peerManager.stateManager.canStartStreaming()) {
+        console.warn('⚠️ Cannot start streaming in current state:', currentState.connection);
+        return;
+      }
+
+      // Ensure host video element has audio enabled and at full volume
       console.log('🔊 Host video audio check before streaming:', {
         muted: this.videoPlayer.videoElement.muted,
         volume: this.videoPlayer.videoElement.volume
       });
       
-      // Temporarily unmute host video to ensure audio is captured
-      const hostOriginalMuted = this.videoPlayer.videoElement.muted;
-      this.videoPlayer.videoElement.muted = false;
+      // Ensure host video has full volume for local playback
       this.videoPlayer.videoElement.volume = 1.0;
+      this.videoPlayer.videoElement.muted = false;
+      
+      console.log('🔊 Host video audio ensured at full volume:', {
+        muted: this.videoPlayer.videoElement.muted,
+        volume: this.videoPlayer.videoElement.volume
+      });
 
-      // Start video streaming through PeerManager
+      // CRITICAL: Mute the video element locally to prevent audio conflicts
+      const originalMuted = this.videoPlayer.videoElement.muted;
+      const originalVolume = this.videoPlayer.videoElement.volume;
+      this.videoPlayer.videoElement.muted = true;
+      console.log('🔇 Muted video element locally to prevent microphone conflicts');
+
+      // Start video streaming through PeerManager (VIDEO + MOVIE AUDIO)
       console.log('🎥 Calling peerManager.startVideoStreaming...');
       const result = await this.peerManager.startVideoStreaming(
         this.videoPlayer.videoElement,
         { 
           frameRate: 30,
           quality: 'high',
-          includeAudio: true
+          includeMovieAudio: true // Enable movie audio capture with video
         }
       );
 
-      // Restore host video muted state (host usually mutes their own video to avoid echo)
-      this.videoPlayer.videoElement.muted = hostOriginalMuted;
-
       console.log('🎥 Video streaming result:', result);
+      console.log('🔍 Streaming state after start attempt:', this.peerManager.getStreamingState());
+
+      // Restore video element state for local playback
+      this.videoPlayer.videoElement.muted = originalMuted;
+      this.videoPlayer.videoElement.volume = originalVolume;
+      console.log('🔊 Restored video element audio state for local playback');
 
       if (result.success) {
         console.log('✅ Video streaming started successfully');
@@ -2008,5 +2058,27 @@ export class RoomView {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  // Console testing methods for volume adjustment
+  testMicrophoneVolume(level = 3.0) {
+    if (this.peerManager) {
+      const result = this.peerManager.boostMicrophoneVolume(level);
+      console.log(`🎙️ Microphone volume test:`, result);
+      return result;
+    }
+    console.warn('⚠️ No peer manager available');
+  }
+
+  testAudioLevels(micVolume = 2.5, movieVolume = 0.15) {
+    if (this.peerManager) {
+      const result = this.peerManager.adjustAudioLevels({
+        micVolume,
+        movieVolume
+      });
+      console.log(`🎚️ Audio levels test:`, result);
+      return result;
+    }
+    console.warn('⚠️ No peer manager available');
   }
 }

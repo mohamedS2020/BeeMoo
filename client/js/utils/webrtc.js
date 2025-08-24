@@ -64,64 +64,105 @@ export class WebRTCUtils {
         throw new Error('Video element does not support captureStream');
       }
 
-      const { frameRate = 30, quality = 'high', includeAudio = true } = options;
+      const { frameRate = 30, quality = 'high', includeMovieAudio = false } = options;
       
       console.log('🎥 Capturing stream from video element:', {
         currentSrc: videoElement.currentSrc,
         videoWidth: videoElement.videoWidth,
         videoHeight: videoElement.videoHeight,
-        muted: videoElement.muted,
-        volume: videoElement.volume,
-        readyState: videoElement.readyState
+        readyState: videoElement.readyState,
+        includeMovieAudio
       });
       
-      // Ensure video element is not muted for audio capture
-      const originalMuted = videoElement.muted;
-      if (includeAudio) {
-        videoElement.muted = false;
-      }
-      
       // Capture stream from video element (includes both video and audio by default)
-      const stream = videoElement.captureStream(frameRate);
+      const originalStream = videoElement.captureStream(frameRate);
       
-      // Restore original muted state
-      videoElement.muted = originalMuted;
-      
-      if (!stream) {
+      if (!originalStream) {
         throw new Error('Failed to capture stream from video element');
       }
 
-      const videoTracks = stream.getVideoTracks();
-      const audioTracks = stream.getAudioTracks();
-      
-      console.log(`🎥 Created stream with ${videoTracks.length} video tracks and ${audioTracks.length} audio tracks`);
+      const videoTracks = originalStream.getVideoTracks();
+      const audioTracks = originalStream.getAudioTracks();
       
       if (videoTracks.length === 0) {
         throw new Error('No video tracks in captured stream');
       }
 
-      // Log track details
-      videoTracks.forEach((track, i) => {
-        console.log(`🎥 Video track ${i}:`, {
-          id: track.id,
-          label: track.label,
-          enabled: track.enabled,
-          readyState: track.readyState,
-          settings: track.getSettings?.()
+      if (includeMovieAudio) {
+        // Return stream with BOTH video and movie audio
+        console.log(`🎥🔊 Created stream with video AND movie audio:`, {
+          videoTracks: videoTracks.length,
+          audioTracks: audioTracks.length
         });
-      });
-
-      audioTracks.forEach((track, i) => {
-        console.log(`🔊 Audio track ${i}:`, {
-          id: track.id,
-          label: track.label,
-          enabled: track.enabled,
-          readyState: track.readyState,
-          settings: track.getSettings?.()
+        
+        // Log track details
+        videoTracks.forEach((track, i) => {
+          console.log(`🎥 Video track ${i}:`, {
+            id: track.id,
+            label: track.label || 'video-track',
+            enabled: track.enabled,
+            readyState: track.readyState,
+            settings: track.getSettings?.()
+          });
         });
-      });
 
-      return { success: true, stream, error: null };
+        audioTracks.forEach((track, i) => {
+          // Label movie audio tracks for identification
+          Object.defineProperty(track, 'label', {
+            value: 'movie-audio',
+            writable: false,
+            configurable: true
+          });
+          
+          console.log(`🔊 Movie audio track ${i}:`, {
+            id: track.id,
+            label: track.label,
+            enabled: track.enabled,
+            readyState: track.readyState,
+            settings: track.getSettings?.()
+          });
+        });
+
+        return { 
+          success: true, 
+          stream: originalStream, 
+          error: null,
+          tracks: {
+            video: videoTracks.length,
+            audio: audioTracks.length
+          }
+        };
+      } else {
+        // Create a new stream with ONLY video tracks (legacy behavior)
+        const videoOnlyStream = new MediaStream();
+        
+        videoTracks.forEach(track => {
+          videoOnlyStream.addTrack(track);
+        });
+        
+        console.log(`🎥 Created VIDEO-ONLY stream with ${videoTracks.length} video tracks (audio excluded)`);
+        
+        // Log video track details only
+        videoTracks.forEach((track, i) => {
+          console.log(`🎥 Video track ${i}:`, {
+            id: track.id,
+            label: track.label,
+            enabled: track.enabled,
+            readyState: track.readyState,
+            settings: track.getSettings?.()
+          });
+        });
+
+        return { 
+          success: true, 
+          stream: videoOnlyStream, 
+          error: null,
+          tracks: {
+            video: videoTracks.length,
+            audio: 0
+          }
+        };
+      }
       
     } catch (error) {
       console.error('❌ Failed to create video stream:', error);
@@ -196,6 +237,141 @@ export class WebRTCUtils {
       return { success: true, devices: inputs };
     } catch (error) {
       return { success: false, error };
+    }
+  }
+
+  /**
+   * SOLUTION: Create combined audio stream (microphone + movie audio)
+   * This solves the WebRTC limitation of only supporting one audio track per peer
+   */
+  static async createCombinedAudioVideoStream(videoElement, microphoneStream, options = {}) {
+    try {
+      const { frameRate = 30 } = options;
+      
+      console.log('🎙️🔊 Creating combined audio stream to solve WebRTC limitation');
+      
+      // Create Web Audio API context
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // Capture video stream (with movie audio)
+      const videoStream = videoElement.captureStream(frameRate);
+      const videoTrack = videoStream.getVideoTracks()[0];
+      const movieAudioTrack = videoStream.getAudioTracks()[0];
+      
+      // Get microphone audio track
+      const micTrack = microphoneStream.getAudioTracks()[0];
+      
+      if (!videoTrack) {
+        throw new Error('No video track available from video element');
+      }
+      
+      if (!micTrack) {
+        throw new Error('No microphone track available');
+      }
+      
+      console.log('🎙️ Microphone track:', { id: micTrack.id, label: micTrack.label });
+      if (movieAudioTrack) {
+        console.log('🔊 Movie audio track:', { id: movieAudioTrack.id, label: movieAudioTrack.label });
+      }
+      
+      // Create audio sources
+      const micSource = audioContext.createMediaStreamSource(microphoneStream);
+      const movieSource = movieAudioTrack ? 
+        audioContext.createMediaStreamSource(new MediaStream([movieAudioTrack])) : null;
+      
+      // Create gain nodes for volume control
+      const micGain = audioContext.createGain();
+      const movieGain = audioContext.createGain();
+      
+      // Set volumes (microphone should be prominent for voice clarity)
+      micGain.gain.value = 2.0;  // BOOST microphone volume (200%)
+      movieGain.gain.value = 0.2; // REDUCE movie audio volume (20%)
+      
+      // Create destination for combined audio
+      const destination = audioContext.createMediaStreamDestination();
+      
+      // Connect audio sources to combined output
+      micSource.connect(micGain);
+      micGain.connect(destination);
+      
+      if (movieSource) {
+        movieSource.connect(movieGain);
+        movieGain.connect(destination);
+        console.log('🔊 Movie audio connected to mixer');
+      } else {
+        console.log('🔇 No movie audio available - microphone only');
+      }
+      
+      // Create final combined stream with video + mixed audio
+      const combinedStream = new MediaStream();
+      combinedStream.addTrack(videoTrack); // Add video track
+      
+      // Add the SINGLE combined audio track
+      const combinedAudioTrack = destination.stream.getAudioTracks()[0];
+      if (combinedAudioTrack) {
+        // Label the combined track
+        Object.defineProperty(combinedAudioTrack, 'label', {
+          value: 'combined-audio',
+          writable: false
+        });
+        combinedStream.addTrack(combinedAudioTrack);
+        console.log('🎙️🔊 Combined audio track created:', combinedAudioTrack.id);
+      }
+      
+      console.log('✅ Combined stream created:', {
+        videoTracks: combinedStream.getVideoTracks().length,
+        audioTracks: combinedStream.getAudioTracks().length,
+        micVolume: `${micGain.gain.value * 100}%`,
+        movieVolume: `${movieGain.gain.value * 100}%`,
+        totalTracks: combinedStream.getTracks().length
+      });
+      
+      return { 
+        success: true, 
+        stream: combinedStream,
+        audioContext,
+        micGain,
+        movieGain,
+        cleanup: () => {
+          console.log('🧹 Cleaning up audio context');
+          try {
+            audioContext.close();
+          } catch (error) {
+            console.warn('⚠️ Error closing audio context:', error);
+          }
+        }
+      };
+      
+    } catch (error) {
+      console.error('❌ Failed to create combined audio/video stream:', error);
+      return { success: false, stream: null, error };
+    }
+  }
+
+  /**
+   * Adjust volume levels in combined audio stream
+   */
+  static adjustCombinedAudioLevels(micGain, movieGain, options = {}) {
+    const { micVolume = 2.0, movieVolume = 0.2 } = options;
+    
+    if (micGain) {
+      micGain.gain.value = micVolume;
+      console.log(`🎙️ Microphone volume set to: ${micVolume * 100}%`);
+    }
+    
+    if (movieGain) {
+      movieGain.gain.value = movieVolume;
+      console.log(`🔊 Movie audio volume set to: ${movieVolume * 100}%`);
+    }
+  }
+
+  /**
+   * Boost microphone volume even more if needed
+   */
+  static boostMicrophoneVolume(micGain, level = 3.0) {
+    if (micGain) {
+      micGain.gain.value = level;
+      console.log(`🔊 BOOSTED microphone volume to: ${level * 100}%`);
     }
   }
 }

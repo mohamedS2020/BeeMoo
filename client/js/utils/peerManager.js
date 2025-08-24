@@ -3,6 +3,7 @@
 
 import { RTCSignaling } from './rtcSignaling.js';
 import { WebRTCUtils } from './webrtc.js';
+import { StreamStateManager } from './streamStateManager.js';
 
 export class PeerManager {
   constructor(socketClient, localStreamProvider) {
@@ -21,7 +22,16 @@ export class PeerManager {
     // Track senders separately to maintain control
     this.microphoneSenders = new Map(); // peerId -> RTCRtpSender for mic audio
     this.videoSenders = new Map(); // peerId -> RTCRtpSender for video
-    this.videoAudioSenders = new Map(); // peerId -> RTCRtpSender for video audio
+    this.movieAudioSenders = new Map(); // peerId -> RTCRtpSender for movie audio
+
+    // State Management System
+    this.stateManager = new StreamStateManager();
+    
+    // Listen to state changes
+    this.stateManager.on('stateChanged', (data) => {
+      console.log(`🔄 Stream state: ${data.from} → ${data.to} (${data.event})`);
+      this._handleStateChange(data);
+    });
 
     // Bind signaling events
     this.signaling.onOffer(async ({ from, sdp }) => {
@@ -147,16 +157,16 @@ export class PeerManager {
         this.configureVideoSender(sender, peerId);
       });
       
-      // Add video audio tracks with label
+      // Add movie audio tracks with label
       this.currentVideoStream.getAudioTracks().forEach(track => {
         // Clone the track and set a label to distinguish it
         const clonedTrack = track.clone();
         Object.defineProperty(clonedTrack, 'label', {
-          value: 'video-audio',
+          value: 'movie-audio',
           writable: false
         });
         const sender = pc.addTrack(clonedTrack, this.currentVideoStream);
-        this.videoAudioSenders.set(peerId, sender);
+        this.movieAudioSenders.set(peerId, sender);
       });
     }
 
@@ -211,7 +221,7 @@ export class PeerManager {
       // Clean up sender references
       this.microphoneSenders.delete(peerId);
       this.videoSenders.delete(peerId);
-      this.videoAudioSenders.delete(peerId);
+      this.movieAudioSenders.delete(peerId);
     }
   }
 
@@ -231,9 +241,104 @@ export class PeerManager {
   }
 
   /**
-   * Start video streaming from host to all participants
+   * Handle state changes from StreamStateManager
+   */
+  _handleStateChange(data) {
+    switch (data.to) {
+      case 'streaming':
+        this._onStreamingStarted();
+        break;
+      case 'voice_only':
+        this._onStreamingStopped();
+        break;
+      case 'video_ready':
+        this._onVideoReady();
+        break;
+    }
+  }
+
+  _onStreamingStarted() {
+    console.log('🎬 Streaming started - ensuring microphone preservation');
+    this.ensureMicrophoneTracks();
+  }
+
+  _onStreamingStopped() {
+    console.log('🎬 Streaming stopped - preserving microphone only');
+    this.ensureMicrophoneTracks();
+  }
+
+  _onVideoReady() {
+    console.log('🎬 Video ready for streaming');
+  }
+
+  /**
+   * Start video streaming from host to all participants - STATE MANAGED
    */
   async startVideoStreaming(videoElement, options = {}) {
+    try {
+      if (!this.isHost) {
+        throw new Error('Only hosts can start video streaming');
+      }
+
+      if (!videoElement || typeof videoElement.captureStream !== 'function') {
+        const errorMessage = 'Video element does not support captureStream';
+        console.error(`❌ ${errorMessage}`);
+        return { success: false, error: errorMessage };
+      }
+
+      // Check if we can start streaming via state manager
+      if (!this.stateManager.canStartStreaming()) {
+        console.log('🔄 Preparing for video streaming...');
+        const prepResult = await this.stateManager.transition('VIDEO_READY', {
+          videoElement,
+          peerManager: this
+        });
+        
+        if (!prepResult.success) {
+          return { success: false, error: `Cannot prepare streaming: ${prepResult.error}` };
+        }
+      }
+
+      // Use state manager to start streaming
+      console.log('🎥 Starting video streaming via state manager...');
+      const result = await this.stateManager.transition('START_STREAMING', {
+        peerManager: this,
+        videoElement,
+        options
+      });
+
+      if (result.success) {
+        // Store current video stream reference for compatibility
+        this.currentVideoStream = this.stateManager.state.streams.video;
+        
+        // Renegotiate all peer connections
+        for (const peerId of this.peerIdToPc.keys()) {
+          await this.renegotiatePeer(peerId);
+        }
+        
+        console.log('✅ Video streaming started via state manager');
+        console.log('🔍 Current state:', this.stateManager.getCurrentState());
+        
+        return { 
+          success: true, 
+          stream: this.currentVideoStream,
+          state: this.stateManager.getCurrentState()
+        };
+      } else {
+        return { success: false, error: result.error };
+      }
+
+    } catch (error) {
+      console.error('❌ Failed to start video streaming:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * LEGACY METHOD - maintained for compatibility
+   * Start video streaming from host to all participants
+   */
+  async startVideoStreaming_LEGACY(videoElement, options = {}) {
     try {
       if (!this.isHost) {
         throw new Error('Only hosts can start video streaming');
@@ -272,14 +377,25 @@ export class PeerManager {
             } else {
               // Verify the existing microphone sender is still valid
               const existingSender = this.microphoneSenders.get(peerId);
-              if (!existingSender.track || existingSender.track.readyState !== 'live') {
+              console.log(`🔍 Microphone sender check for peer ${peerId}:`, {
+                hasTrack: !!existingSender.track,
+                trackId: existingSender.track?.id,
+                readyState: existingSender.track?.readyState,
+                enabled: existingSender.track?.enabled,
+                muted: existingSender.track?.muted
+              });
+              
+              if (!existingSender.track || existingSender.track.readyState !== 'live' || existingSender.track.muted) {
                 // Remove invalid sender and add new one
+                console.log(`🎙️ Replacing microphone track for peer ${peerId} - track invalid or muted`);
                 try { pc.removeTrack(existingSender); } catch {}
                 const sender = pc.addTrack(track, this.currentLocalStream);
                 this.microphoneSenders.set(peerId, sender);
-                console.log(`🎙️ Replaced invalid microphone track for peer ${peerId}`);
+                console.log(`🎙️ Replaced microphone track for peer ${peerId}`);
               } else {
-                console.log(`🎙️ Microphone track for peer ${peerId} is already valid`);
+                console.log(`🎙️ Microphone track for peer ${peerId} is valid - ensuring enabled`);
+                // Ensure the track is enabled
+                existingSender.track.enabled = true;
               }
             }
           }
@@ -293,20 +409,15 @@ export class PeerManager {
           console.log(`🎥 Added video track to peer ${peerId}`);
         }
         
-        // Add audio tracks from video stream (movie audio) with label
+        // Add movie audio tracks from video stream
         for (const track of this.currentVideoStream.getAudioTracks()) {
-          // Clone the track and set a label to distinguish it from mic audio
-          const clonedTrack = track.clone();
-          Object.defineProperty(clonedTrack, 'label', {
-            value: 'video-audio',
-            writable: false
-          });
-          const sender = pc.addTrack(clonedTrack, this.currentVideoStream);
-          this.videoAudioSenders.set(peerId, sender);
-          console.log(`🔊 Added video audio track to peer ${peerId}:`, {
-            id: clonedTrack.id,
-            label: clonedTrack.label,
-            enabled: clonedTrack.enabled
+          // Use the track directly (already labeled as 'movie-audio' by webrtc.js)
+          const sender = pc.addTrack(track, this.currentVideoStream);
+          this.movieAudioSenders.set(peerId, sender);
+          console.log(`🔊 Added movie audio track to peer ${peerId}:`, {
+            id: track.id,
+            label: track.label,
+            enabled: track.enabled
           });
         }
         
@@ -320,7 +431,7 @@ export class PeerManager {
           audioSenders: audioSenders.length,
           videoSenders: videoSenderCount,
           hasMicrophone: this.microphoneSenders.has(peerId),
-          hasVideoAudio: this.videoAudioSenders.has(peerId),
+          hasMovieAudio: this.movieAudioSenders.has(peerId),
           hasVideo: this.videoSenders.has(peerId)
         });
         
@@ -342,7 +453,45 @@ export class PeerManager {
   /**
    * Stop video streaming
    */
+  /**
+   * Stop video streaming - STATE MANAGED
+   */
   async stopVideoStreaming() {
+    try {
+      // Use state manager to stop streaming
+      console.log('🛑 Stopping video streaming via state manager...');
+      const result = await this.stateManager.transition('STOP_STREAMING', {
+        peerManager: this
+      });
+
+      if (result.success) {
+        // Clear current video stream reference for compatibility
+        this.currentVideoStream = null;
+        
+        // Renegotiate all peer connections to update track states
+        for (const peerId of this.peerIdToPc.keys()) {
+          await this.renegotiatePeer(peerId);
+        }
+        
+        console.log('✅ Video streaming stopped via state manager');
+        console.log('🔍 Current state:', this.stateManager.getCurrentState());
+        
+        return { success: true, state: this.stateManager.getCurrentState() };
+      } else {
+        return { success: false, error: result.error };
+      }
+
+    } catch (error) {
+      console.error('❌ Failed to stop video streaming:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * LEGACY METHOD - maintained for compatibility
+   * Stop video streaming
+   */
+  async stopVideoStreaming_LEGACY() {
     if (!this.currentVideoStream) return;
 
     try {
@@ -355,14 +504,14 @@ export class PeerManager {
           this.videoSenders.delete(peerId);
         }
         
-        // Remove video audio senders
-        const videoAudioSender = this.videoAudioSenders.get(peerId);
-        if (videoAudioSender) {
-          pc.removeTrack(videoAudioSender);
-          this.videoAudioSenders.delete(peerId);
+        // Remove movie audio senders
+        const movieAudioSender = this.movieAudioSenders.get(peerId);
+        if (movieAudioSender) {
+          pc.removeTrack(movieAudioSender);
+          this.movieAudioSenders.delete(peerId);
         }
         
-        console.log(`🎥 Removed video and video audio tracks from peer ${peerId}`);
+        console.log(`🎥 Removed video and movie audio tracks from peer ${peerId}`);
       }
 
       // Stop video stream tracks
@@ -510,21 +659,21 @@ export class PeerManager {
         }
       }
       
-      // Verify video audio tracks are still attached
-      if (this.currentVideoStream && this.videoAudioSenders.has(peerId)) {
-        const videoAudioSender = this.videoAudioSenders.get(peerId);
-        const videoAudioTrack = this.currentVideoStream.getAudioTracks()[0];
+      // Verify movie audio tracks are still attached
+      if (this.currentVideoStream && this.movieAudioSenders.has(peerId)) {
+        const movieAudioSender = this.movieAudioSenders.get(peerId);
+        const movieAudioTrack = this.currentVideoStream.getAudioTracks()[0];
         
-        if (videoAudioTrack && (!videoAudioSender.track || videoAudioSender.track.readyState !== 'live')) {
-          console.log(`🔊 Re-attaching video audio track for peer ${peerId} before renegotiation`);
-          try { pc.removeTrack(videoAudioSender); } catch {}
-          const clonedTrack = videoAudioTrack.clone();
+        if (movieAudioTrack && (!movieAudioSender.track || movieAudioSender.track.readyState !== 'live')) {
+          console.log(`🔊 Re-attaching movie audio track for peer ${peerId} before renegotiation`);
+          try { pc.removeTrack(movieAudioSender); } catch {}
+          const clonedTrack = movieAudioTrack.clone();
           Object.defineProperty(clonedTrack, 'label', {
-            value: 'video-audio',
+            value: 'movie-audio',
             writable: false
           });
           const newSender = pc.addTrack(clonedTrack, this.currentVideoStream);
-          this.videoAudioSenders.set(peerId, newSender);
+          this.movieAudioSenders.set(peerId, newSender);
         }
       }
 
@@ -558,6 +707,119 @@ export class PeerManager {
   setHost(isHost) {
     this.isHost = isHost;
     console.log(`🎥 Peer role set to: ${isHost ? 'HOST' : 'PARTICIPANT'}`);
+    
+    // Initialize state manager for voice chat when becoming host
+    if (isHost) {
+      this._initializeVoiceChat();
+    }
+  }
+
+  /**
+   * Initialize voice chat via state manager
+   */
+  async _initializeVoiceChat() {
+    try {
+      const result = await this.stateManager.transition('START_VOICE_CHAT', {
+        peerManager: this
+      });
+      
+      if (result.success) {
+        console.log('🎙️ Voice chat initialized via state manager');
+      } else {
+        console.warn('⚠️ Failed to initialize voice chat:', result.error);
+      }
+    } catch (error) {
+      console.error('❌ Voice chat initialization error:', error);
+    }
+  }
+
+  /**
+   * Prepare video for streaming (when video is loaded and ready)
+   */
+  async prepareVideoStreaming(videoElement) {
+    try {
+      const result = await this.stateManager.transition('VIDEO_READY', {
+        videoElement,
+        peerManager: this
+      });
+      
+      if (result.success) {
+        console.log('🎬 Video prepared for streaming via state manager');
+        return { success: true, state: this.stateManager.getCurrentState() };
+      } else {
+        console.warn('⚠️ Failed to prepare video streaming:', result.error);
+        return { success: false, error: result.error };
+      }
+    } catch (error) {
+      console.error('❌ Video preparation error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Reset to voice-only mode (when video is unloaded)
+   */
+  async resetToVoiceOnly() {
+    try {
+      const result = await this.stateManager.transition('RESET_TO_VOICE', {
+        peerManager: this
+      });
+      
+      if (result.success) {
+        console.log('🔄 Reset to voice-only via state manager');
+        return { success: true, state: this.stateManager.getCurrentState() };
+      } else {
+        console.warn('⚠️ Failed to reset to voice-only:', result.error);
+        return { success: false, error: result.error };
+      }
+    } catch (error) {
+      console.error('❌ Reset to voice-only error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Get current streaming state
+   */
+  getStreamingState() {
+    return this.stateManager.getCurrentState();
+  }
+
+  /**
+   * Adjust audio levels during streaming
+   */
+  adjustAudioLevels(options = {}) {
+    if (this.stateManager.state.micGain && this.stateManager.state.movieGain) {
+      WebRTCUtils.adjustCombinedAudioLevels(
+        this.stateManager.state.micGain,
+        this.stateManager.state.movieGain,
+        options
+      );
+      return { success: true };
+    } else {
+      console.warn('⚠️ No audio gains available - not in combined streaming mode');
+      return { success: false, error: 'Not in combined streaming mode' };
+    }
+  }
+
+  /**
+   * Boost microphone volume specifically
+   */
+  boostMicrophoneVolume(level = 3.0) {
+    if (this.stateManager.state.micGain) {
+      WebRTCUtils.boostMicrophoneVolume(this.stateManager.state.micGain, level);
+      return { success: true, level };
+    } else {
+      console.warn('⚠️ No microphone gain available - not in combined streaming mode');
+      return { success: false, error: 'Not in combined streaming mode' };
+    }
+  }
+
+  /**
+   * Get detailed streaming state for debugging
+   */
+  getDetailedStreamingState() {
+    return this.stateManager.getDetailedState();
   }
 
   async _getOrCreateLocalStream() {
@@ -671,7 +933,7 @@ export class PeerManager {
         videoSenders: senders.filter(s => s.track && s.track.kind === 'video').length,
         hasMicrophone: this.microphoneSenders.has(peerId),
         hasVideo: this.videoSenders.has(peerId),
-        hasVideoAudio: this.videoAudioSenders.has(peerId),
+        hasMovieAudio: this.movieAudioSenders.has(peerId),
         connectionState: pc.connectionState,
         iceConnectionState: pc.iceConnectionState
       };
@@ -692,12 +954,18 @@ export class PeerManager {
       this.closePeer(peerId);
     }
     
+    // Clean up state manager
+    if (this.stateManager) {
+      this.stateManager.destroy();
+      this.stateManager = null;
+    }
+    
     // Clean up
     this.signaling.offAll();
     this.connectionQuality.clear();
     this.microphoneSenders.clear();
     this.videoSenders.clear();
-    this.videoAudioSenders.clear();
+    this.movieAudioSenders.clear();
     
     console.log('🎥 PeerManager destroyed');
   }
