@@ -1234,6 +1234,18 @@ export class VideoPlayer {
       this.videoElement.volume = this.volume;
       this.videoElement.muted = this.volume === 0;
       console.log(`🔊 WebRTC volume set to: ${Math.round(this.volume * 100)}%`);
+      
+      // Extra verification for participants
+      if (!this.isHost) {
+        setTimeout(() => {
+          console.log(`🔍 Participant volume verification:`, {
+            requested: Math.round(this.volume * 100),
+            actual: Math.round(this.videoElement.volume * 100),
+            muted: this.videoElement.muted,
+            hasAudio: this.videoElement.srcObject?.getAudioTracks().length > 0
+          });
+        }, 100);
+      }
     } else {
       // For regular streaming, use streaming manager
       this.streamingManager.setVolume(this.volume);
@@ -2029,5 +2041,25 @@ export class VideoPlayer {
     }
     
     console.log('🎬 Video player destroyed');
+  }
+  
+  /**
+   * Ensure volume controls work properly for WebRTC streams
+   */
+  ensureVolumeControlsWork() {
+    if (this.videoElement.getAttribute('data-webrtc') === 'true') {
+      // Re-apply current volume setting to ensure it takes effect
+      const currentVolume = this.volume;
+      console.log(`🔧 Ensuring volume controls work for WebRTC stream, current setting: ${Math.round(currentVolume * 100)}%`);
+      
+      // Force re-application of volume
+      this.videoElement.volume = currentVolume;
+      this.videoElement.muted = currentVolume === 0 || this.isMuted;
+      
+      // Update UI to match
+      this.updateVolumeControls();
+      
+      console.log(`✅ Volume controls ensured: element=${Math.round(this.videoElement.volume * 100)}%, muted=${this.videoElement.muted}`);
+    }
   }
 }

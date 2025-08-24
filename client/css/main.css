@@ -3277,7 +3277,7 @@ header p {
   }
   
   .volume-container {
-    display: none; /* Hide volume on mobile to save space */
+    display: flex; /* Keep volume controls visible on mobile - important for movie streaming */
   }
   
   .viewer {
@@ -3351,7 +3351,7 @@ header p {
   }
   
   .volume-container {
-    display: none; /* Hide volume slider on very small screens */
+    display: flex; /* Keep volume controls visible on very small screens - essential for audio control */
   }
   
   .buffer-health {

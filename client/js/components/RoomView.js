@@ -91,25 +91,44 @@ export class RoomView {
     // Initialize PeerManager with a local stream provider
     this.peerManager = new PeerManager(this.socketClient, async () => {
       try {
-        console.log(`🎙️ Requesting microphone access for ${this.isHost ? 'HOST' : 'PARTICIPANT'}`);
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }, 
-          video: false 
+        console.log(`🎙️ Requesting HIGH-QUALITY microphone access for ${this.isHost ? 'HOST' : 'PARTICIPANT'}`);
+        
+        // Use enhanced audio constraints for crystal clear voice
+        const constraints = WebRTCUtils.getAudioConstraints({ 
+          highQuality: true,  // Enable high-quality voice settings
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
         });
-        console.log('✅ Microphone access granted:', {
+        
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log('✅ HIGH-QUALITY microphone access granted:', {
           tracks: stream.getAudioTracks().length,
-          trackEnabled: stream.getAudioTracks()[0]?.enabled
+          trackEnabled: stream.getAudioTracks()[0]?.enabled,
+          sampleRate: stream.getAudioTracks()[0]?.getSettings?.()?.sampleRate,
+          constraints: 'Enhanced for voice clarity'
         });
         return stream;
       } catch (e) {
-        console.warn('⚠️ Microphone not available, using silent stream:', e.message);
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const dest = ctx.createMediaStreamDestination();
-        return dest.stream; // silent stream
+        console.warn('⚠️ High-quality microphone not available, falling back to standard:', e.message);
+        
+        // Fallback to standard enhanced constraints
+        try {
+          const fallbackConstraints = WebRTCUtils.getAudioConstraints({ 
+            highQuality: false,  // Disable some high-quality features for compatibility
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          });
+          const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+          console.log('✅ Enhanced microphone access granted as fallback');
+          return stream;
+        } catch (fallbackError) {
+          console.warn('⚠️ Microphone not available, using silent stream:', fallbackError.message);
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const dest = ctx.createMediaStreamDestination();
+          return dest.stream; // silent stream
+        }
       }
     });
 
@@ -663,15 +682,15 @@ export class RoomView {
       this.peerManager = new PeerManager(this.socketClient, async () => {
         try { 
           console.log(`🎙️ Recreating microphone stream for ${this.isHost ? 'HOST' : 'PARTICIPANT'}`);
-          const stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }, 
-            video: false 
+          // Use enhanced audio constraints for microphone stream recreation
+          const constraints = WebRTCUtils.getAudioConstraints({ 
+            highQuality: true,  // High-quality voice for recreated stream
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
           });
-          console.log('✅ Microphone stream recreated');
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          console.log('✅ Enhanced microphone stream recreated');
           return stream;
         }
         catch (error) {
@@ -1105,11 +1124,13 @@ export class RoomView {
       this.videoPlayer.videoElement.autoplay = true;
       this.videoPlayer.videoElement.playsInline = true;
       this.videoPlayer.videoElement.muted = false; // Ensure video audio is not muted
-      this.videoPlayer.videoElement.volume = 1.0; // Ensure volume is at maximum
       
-      // Video audio is handled by existing video player controls
+      // Mark video element as WebRTC stream BEFORE setting volume
+      this.videoPlayer.videoElement.setAttribute('data-webrtc', 'true');
       
-      // Mark video element as WebRTC stream
+      // Restore participant's chosen volume (don't force to 1.0)
+      this.videoPlayer.videoElement.volume = this.videoPlayer.volume || 1.0;
+      console.log(`🔊 Restored participant volume to: ${Math.round(this.videoPlayer.videoElement.volume * 100)}%`);
       this.videoPlayer.videoElement.setAttribute('data-webrtc', 'true');
       
       // Listen for stream events
@@ -1129,6 +1150,9 @@ export class RoomView {
         } else {
           console.warn('⚠️ Video stream has no audio tracks - no sound expected');
         }
+        
+        // Ensure participant volume controls work after stream loads
+        this.videoPlayer.ensureVolumeControlsWork();
       }, { once: true });
       
       this.videoPlayer.videoElement.addEventListener('canplay', () => {
