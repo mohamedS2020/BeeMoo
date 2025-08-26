@@ -30,7 +30,8 @@ const io = new Server(server, {
 
 // Middleware
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: '2gb' }));
+app.use(express.urlencoded({ limit: '2gb', extended: true }));
 
 // Security headers middleware
 app.use((req, res, next) => {

@@ -42,7 +42,7 @@ describe('MovieFileSelector Component', () => {
       expect(movieFileSelector.onFileSelected).toBe(mockCallback);
       expect(movieFileSelector.selectedFile).toBe(null);
       expect(movieFileSelector.isUploading).toBe(false);
-      expect(movieFileSelector.maxFileSize).toBe(1024 * 1024 * 1024); // 1GB
+      expect(movieFileSelector.maxFileSize).toBe(2 * 1024 * 1024 * 1024); // 2GB
     });
 
     it('should have supported formats defined', () => {
@@ -62,7 +62,7 @@ describe('MovieFileSelector Component', () => {
       expect(html).toContain('movie-file-selector');
       expect(html).toContain('Select Movie File');
       expect(html).toContain('Drop video file here or click to browse');
-      expect(html).toContain('Supports MP4, WebM, OGG • Max 1GB');
+      expect(html).toContain('Supports MP4, WebM, OGG • Max 2GB');
       expect(html).toContain('type="file"');
       expect(html).toContain('accept="video/mp4,video/webm,video/ogg,video/quicktime"');
     });

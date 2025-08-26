@@ -16,8 +16,8 @@ export class MovieFileSelector {
       'video/quicktime': { ext: 'mov', name: 'QuickTime (limited support)' }
     };
     
-    // Maximum file size (1GB)
-    this.maxFileSize = 1024 * 1024 * 1024;
+    // Maximum file size (2GB)
+    this.maxFileSize = 2 * 1024 * 1024 * 1024;
   }
 
   render() {
@@ -37,7 +37,7 @@ export class MovieFileSelector {
                 </svg>
                 <div class="file-input-text">
                   <span class="file-input-primary">Drop video file here or click to browse</span>
-                  <span class="file-input-secondary">Supports MP4, WebM, OGG • Max 1GB</span>
+                  <span class="file-input-secondary">Supports MP4, WebM, OGG • Max 2GB</span>
                 </div>
               </div>
             </div>
