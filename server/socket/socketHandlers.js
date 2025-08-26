@@ -9,6 +9,7 @@ class SocketHandlers {
     this.handleConnection = this.handleConnection.bind(this);
     this.handleCreateRoom = this.handleCreateRoom.bind(this);
     this.handleJoinRoom = this.handleJoinRoom.bind(this);
+    this.handleSessionRecovery = this.handleSessionRecovery.bind(this);
     this.handleLeaveRoom = this.handleLeaveRoom.bind(this);
     this.handleMicToggle = this.handleMicToggle.bind(this);
     this.handleMovieControl = this.handleMovieControl.bind(this);
@@ -29,6 +30,7 @@ class SocketHandlers {
     socket.on('validate-room', (data) => this.handleValidateRoom(socket, data));
     socket.on('join-room', (data) => this.handleJoinRoom(socket, data));
     socket.on('leave-room', () => this.handleLeaveRoom(socket));
+    socket.on('recover-session', (data) => this.handleSessionRecovery(socket, data));
     socket.on('mic-toggle', (data) => this.handleMicToggle(socket, data));
     socket.on('movie-control', (data) => this.handleMovieControl(socket, data));
     socket.on('chat-message', (data) => this.handleChatMessage(socket, data));
@@ -158,6 +160,131 @@ class SocketHandlers {
     } catch (error) {
       console.error('Error in handleJoinRoom:', error);
       socket.emit('join-room-error', { error: 'Internal server error' });
+    }
+  }
+
+  /**
+   * Handle session recovery after reconnection
+   * @param {Socket} socket 
+   * @param {Object} data 
+   */
+  handleSessionRecovery(socket, data) {
+    try {
+      console.log(`🔄 Session recovery attempt for ${data.username} in room ${data.roomCode}`);
+      
+      const { roomCode, username, isHost, previousSocketId } = data;
+      
+      // Validate that the room still exists
+      const room = this.roomManager.getRoom(roomCode);
+      if (!room) {
+        console.log(`❌ Room ${roomCode} no longer exists`);
+        socket.emit('session-recovery-failed', { error: 'Room no longer exists' });
+        return;
+      }
+
+      // Check if user was previously in the room (in User map)
+      let existingUser = null;
+      for (const [socketId, user] of this.roomManager.users.entries()) {
+        if (user.username === username && user.roomCode === roomCode) {
+          existingUser = user;
+          console.log(`🔍 Found existing user ${username} with socket ID ${socketId}`);
+          break;
+        }
+      }
+
+      if (!existingUser) {
+        console.log(`❌ User ${username} was not found in room ${roomCode}`);
+        console.log(`🔍 Current users in room: ${Array.from(this.roomManager.users.values())
+          .filter(u => u.roomCode === roomCode)
+          .map(u => u.username)
+          .join(', ')}`);
+        socket.emit('session-recovery-failed', { error: 'Session not found in room' });
+        return;
+      }
+
+      // Check if user has been disconnected too long
+      if (existingUser.isDisconnectedTooLong && existingUser.isDisconnectedTooLong(5)) {
+        console.log(`❌ User ${username} disconnected too long, cleaning up session`);
+        
+        // Remove from both maps
+        this.roomManager.users.delete(existingUser.socketId);
+        room.removeParticipant(existingUser.socketId);
+        
+        socket.emit('session-recovery-failed', { error: 'Session expired due to long disconnection' });
+        return;
+      }
+
+      // Update user with new socket ID and reconnect
+      const oldSocketId = existingUser.socketId;
+      if (existingUser.reconnect) {
+        existingUser.reconnect(socket.id);
+      } else {
+        existingUser.socketId = socket.id;
+        existingUser.isConnected = true;
+      }
+      
+      // Update room manager's user mapping
+      this.roomManager.users.delete(oldSocketId);
+      this.roomManager.users.set(socket.id, existingUser);
+      
+      // Update room's participant record with new socket ID
+      // Find participant by username since socket ID might have changed
+      let participant = null;
+      for (const [socketId, p] of room.participants.entries()) {
+        if (p.username === username) {
+          participant = p;
+          room.participants.delete(socketId);
+          break;
+        }
+      }
+      
+      if (participant) {
+        participant.socketId = socket.id;
+        participant.isConnected = true;
+        room.participants.set(socket.id, participant);
+      } else {
+        console.log(`⚠️  Participant record for ${username} not found in room ${roomCode}, creating new one`);
+        // Create a new participant record if somehow missing
+        participant = {
+          socketId: socket.id,
+          username: username,
+          isHost: isHost,
+          joinedAt: new Date(),
+          micMuted: false,
+          isConnected: true
+        };
+        room.participants.set(socket.id, participant);
+      }
+      
+      // If this was the host, update host socket ID in room
+      if (isHost && room.hostSocketId === oldSocketId) {
+        room.hostSocketId = socket.id;
+      }
+
+      // Join the socket room
+      socket.join(roomCode);
+
+      // Notify successful recovery
+      socket.emit('session-recovered', {
+        roomCode: room.roomCode,
+        roomData: room.getRoomInfo(),
+        userData: existingUser.getPublicInfo(),
+        isHost: room.hostSocketId === socket.id,
+        participants: room.getParticipantsArray(),
+        movieState: room.getMovieSyncState()
+      });
+
+      // Notify other users about reconnection
+      socket.to(roomCode).emit('user-reconnected', {
+        user: existingUser.getPublicInfo(),
+        roomCode: roomCode
+      });
+
+      console.log(`✅ Session recovered for ${username} in room ${roomCode} (${oldSocketId} -> ${socket.id})`);
+
+    } catch (error) {
+      console.error('Error in handleSessionRecovery:', error);
+      socket.emit('session-recovery-failed', { error: 'Internal server error' });
     }
   }
 

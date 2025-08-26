@@ -435,4 +435,83 @@ export class WebRTCUtils {
       console.log(`🔊 BOOSTED microphone volume to: ${level * 100}%`);
     }
   }
+
+  /**
+   * Mobile background optimization - keep audio streams active
+   */
+  static optimizeForMobileBackground() {
+    // Force audio context to stay active
+    if (window.AudioContext || window.webkitAudioContext) {
+      const audioElements = document.querySelectorAll('audio');
+      audioElements.forEach(audio => {
+        // Ensure audio elements don't pause in background
+        audio.addEventListener('pause', () => {
+          if (document.hidden) {
+            console.log('📱 Resuming audio for background mode');
+            audio.play().catch(() => {});
+          }
+        });
+
+        // Keep audio playing with minimal volume if needed
+        if (audio.volume > 0) {
+          audio.setAttribute('data-original-volume', audio.volume);
+        }
+      });
+    }
+  }
+
+  /**
+   * Keep WebRTC audio tracks active during background
+   */
+  static maintainWebRTCAudio() {
+    // Find all active audio tracks and ensure they stay enabled
+    const audioTracks = [];
+    
+    // Check all RTCPeerConnections for audio tracks
+    if (window.RTCPeerConnection) {
+      // Get all peer connections (if accessible)
+      document.querySelectorAll('audio').forEach(audio => {
+        if (audio.srcObject instanceof MediaStream) {
+          const tracks = audio.srcObject.getAudioTracks();
+          audioTracks.push(...tracks);
+        }
+      });
+
+      // Ensure all audio tracks remain enabled
+      audioTracks.forEach(track => {
+        if (track.readyState === 'live') {
+          track.enabled = true;
+          console.log('📱 Maintaining audio track:', track.label);
+        }
+      });
+    }
+
+    return audioTracks.length;
+  }
+
+  /**
+   * Get mobile-optimized audio constraints for background use
+   */
+  static getMobileOptimizedAudioConstraints() {
+    return {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        // Mobile-specific optimizations
+        sampleRate: 16000,      // Lower sample rate for better background performance
+        channelCount: 1,        // Mono audio
+        latency: 0.02,          // Slightly higher latency for stability
+        // Enhanced background support
+        googEchoCancellation: true,
+        googNoiseSuppression: true,
+        googAutoGainControl: true,
+        googHighpassFilter: true,
+        // Disable features that might cause issues in background
+        googDucking: false,
+        googAudioMirroring: false
+      },
+      video: false
+    };
+  }
 }

@@ -4069,3 +4069,76 @@ header p {
     transition: none;
   }
 }
+
+/* Session Recovery Notifications */
+.notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  max-width: 400px;
+  z-index: 10000;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  animation: slideInRight 0.3s ease-out;
+}
+
+.notification-content {
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.notification-close {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.2s ease;
+}
+
+.notification-close:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.notification-success {
+  background: linear-gradient(135deg, #00ff9f, #00cc7f);
+  color: #000;
+}
+
+.notification-warning {
+  background: linear-gradient(135deg, #ffa500, #ff8c00);
+  color: #000;
+}
+
+.notification-error {
+  background: linear-gradient(135deg, #ff4757, #ff3742);
+  color: #fff;
+}
+
+.notification-info {
+  background: linear-gradient(135deg, #00d4ff, #0099cc);
+  color: #000;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}

@@ -13,6 +13,10 @@ export class App {
     this.initialized = false;
     this.currentView = 'landing'; // 'landing', 'room'
     this.currentRoom = null;
+    this.isRecoveringSession = false;
+    
+    // Make app globally available for session recovery callbacks
+    window.beemooApp = this;
     
     // Initialize components
     this.roomCreation = new RoomCreation(
@@ -24,6 +28,136 @@ export class App {
       (roomData) => this.handleRoomJoined(roomData)
     );
     this.roomView = new RoomView(this.socketClient);
+    
+    // Mobile background handling
+    this.wakeLock = null;
+    this.isInRoom = false;
+    this.setupMobileOptimizations();
+  }
+
+  /**
+   * Setup mobile optimizations for background voice chat
+   */
+  setupMobileOptimizations() {
+    // Handle page visibility changes
+    document.addEventListener('visibilitychange', () => {
+      if (this.isInRoom) {
+        if (document.hidden) {
+          this.handlePageHidden();
+        } else {
+          this.handlePageVisible();
+        }
+      }
+    });
+
+    // Handle page lifecycle events (mobile specific)
+    window.addEventListener('pagehide', () => {
+      if (this.isInRoom) {
+        this.handlePageHidden();
+      }
+    });
+
+    window.addEventListener('pageshow', () => {
+      if (this.isInRoom) {
+        this.handlePageVisible();
+      }
+    });
+
+    // Prevent background suspension during voice chat
+    window.addEventListener('beforeunload', () => {
+      this.releaseWakeLock();
+    });
+  }
+
+  /**
+   * Handle page going to background
+   */
+  async handlePageHidden() {
+    console.log('📱 Page going to background - maintaining voice chat');
+    
+    // Try to acquire wake lock to keep audio active
+    await this.acquireWakeLock();
+    
+    // Keep audio context alive
+    this.keepAudioContextAlive();
+  }
+
+  /**
+   * Handle page becoming visible
+   */
+  async handlePageVisible() {
+    console.log('📱 Page visible - resuming normal operation');
+    
+    // Resume any suspended audio contexts
+    this.resumeAudioContext();
+  }
+
+  /**
+   * Acquire screen wake lock to prevent background suspension
+   */
+  async acquireWakeLock() {
+    if ('wakeLock' in navigator) {
+      try {
+        this.wakeLock = await navigator.wakeLock.request('screen');
+        console.log('🔒 Wake lock acquired for voice chat');
+        
+        this.wakeLock.addEventListener('release', () => {
+          console.log('🔓 Wake lock released');
+        });
+      } catch (err) {
+        console.warn('⚠️ Could not acquire wake lock:', err);
+      }
+    }
+  }
+
+  /**
+   * Release wake lock
+   */
+  async releaseWakeLock() {
+    if (this.wakeLock) {
+      await this.wakeLock.release();
+      this.wakeLock = null;
+    }
+  }
+
+  /**
+   * Keep audio context alive during background
+   */
+  keepAudioContextAlive() {
+    // Get all audio elements and keep them playing
+    const audioElements = document.querySelectorAll('audio');
+    audioElements.forEach(audio => {
+      if (!audio.paused) {
+        // Ensure audio continues playing
+        audio.play().catch(() => {});
+      }
+    });
+
+    // Use WebRTC utilities for mobile optimization
+    import('./utils/webrtc.js').then(({ WebRTCUtils }) => {
+      WebRTCUtils.optimizeForMobileBackground();
+      const trackCount = WebRTCUtils.maintainWebRTCAudio();
+      console.log(`📱 Maintaining ${trackCount} audio tracks in background`);
+    });
+
+    // Resume any suspended audio contexts
+    this.resumeAudioContext();
+  }
+
+  /**
+   * Resume suspended audio contexts
+   */
+  resumeAudioContext() {
+    // Resume any suspended audio contexts from WebRTC
+    if (window.AudioContext || window.webkitAudioContext) {
+      const audioElements = document.querySelectorAll('audio');
+      audioElements.forEach(audio => {
+        const audioContext = audio.captureStream?.()?.getAudioTracks()?.[0]?.getSettings?.()?.audioContext;
+        if (audioContext && audioContext.state === 'suspended') {
+          audioContext.resume().catch(() => {});
+        }
+      });
+    }
   }
 
   init() {
@@ -32,32 +166,20 @@ export class App {
       return;
     }
 
-    // Check for persisted room session
-    const session = this.getPersistedRoomSession();
-    if (session && session.roomCode && session.username) {
-      // Try to auto-rejoin room
+    // Check for persisted session data
+    this.socketClient.loadSessionData();
+    const hasSessionData = this.socketClient.sessionData;
+    
+    if (hasSessionData) {
+      console.log('📡 Found session data, attempting recovery...');
+      this.isRecoveringSession = true;
+      this.renderLoading('Recovering session...');
       this.connectToServer();
-      this.socketClient.on('room-joined', (roomData) => {
-        this.currentRoom = roomData;
-        this.navigateToRoom(roomData);
-      });
-      this.socketClient.on('join-room-error', (err) => {
-        this.clearRoomSession();
-        this.render();
-      });
-      // Emit join-room after socket connects
-      this.socketClient.on('connect', () => {
-        this.socketClient.emit('join-room', {
-          roomCode: session.roomCode,
-          username: session.username
-        });
-      });
-      // Show loading UI
-      this.renderLoading('Rejoining room...');
       this.initialized = true;
       return;
     }
 
+    // No session to recover, show normal landing page
     this.render();
     this.setupEventListeners();
     this.connectToServer();
@@ -305,14 +427,26 @@ export class App {
 
   persistRoomSession(roomData) {
     // Save minimal info for auto-rejoin
+    console.log('💾 App persistRoomSession called with:', roomData);
     try {
       const session = {
         roomCode: roomData.roomCode,
-        username: roomData.user?.username,
-        isHost: !!roomData.user?.isHost
+        username: roomData.username || roomData.user?.username,
+        isHost: !!roomData.user?.isHost || false
       };
       localStorage.setItem('beemoo-room-session', JSON.stringify(session));
-    } catch {}
+      
+      // Also save for session recovery
+      console.log('💾 App saving session for recovery:', session);
+      // Disabled - SocketClient now handles session recovery data
+      // this.saveSessionForRecovery(
+      //   session.roomCode,
+      //   session.username,
+      //   session.isHost
+      // );
+    } catch (error) {
+      console.error('Failed to persist session:', error);
+    }
   }
 
   clearRoomSession() {
@@ -321,6 +455,8 @@ export class App {
 
   navigateToRoom(roomData) {
     this.currentView = 'room';
+    this.isInRoom = true; // Track room state for mobile optimizations
+    
     // Render a minimal shell for room
     if (this.appElement) {
       this.appElement.innerHTML = '';
@@ -354,6 +490,8 @@ export class App {
     // Clear current room data
     this.currentRoom = null;
     this.currentView = 'landing';
+    this.isInRoom = false; // No longer in room
+    this.releaseWakeLock(); // Release wake lock when leaving room
     
     // Clear any persisted session
     this.clearRoomSession();
@@ -369,6 +507,117 @@ export class App {
     this.setupEventListeners();
     
     console.log('✅ Successfully returned to landing page');
+  }
+
+  /**
+   * Handle successful session recovery
+   * @param {Object} data 
+   */
+  handleSessionRecovered(data) {
+    console.log('✅ Session recovered successfully:', data);
+    this.isRecoveringSession = false;
+    
+    // Update current room data
+    this.currentRoom = data.roomData;
+    
+    // Create proper room data structure for navigation
+    const roomData = {
+      roomCode: data.roomCode,
+      room: data.roomData,
+      user: data.userData,
+      participants: data.participants,
+      isHost: data.isHost
+    };
+    
+    // Navigate to room view
+    this.navigateToRoom(roomData);
+    
+    // Show recovery success message
+    this.showNotification('✅ Session recovered! Welcome back to the room.', 'success');
+  }
+
+  /**
+   * Handle failed session recovery
+   */
+  handleSessionRecoveryFailed() {
+    console.warn('⚠️ Session recovery failed');
+    this.isRecoveringSession = false;
+    
+    // Clear session data and redirect to landing
+    this.clearRoomSession();
+    this.returnToLanding();
+    
+    // Show recovery failure message
+    this.showNotification('⚠️ Could not recover your session. Please rejoin the room.', 'warning');
+  }
+
+  /**
+   * Return to landing page
+   */
+  returnToLanding() {
+    console.log('🏠 Returning to landing page');
+    this.currentView = 'landing';
+    this.currentRoom = null;
+    this.isInRoom = false; // No longer in room
+    this.releaseWakeLock(); // Release wake lock when returning to landing
+    
+    // Clear session recovery data to prevent future auto-recovery attempts
+    this.socketClient.clearSessionData();
+    
+    this.render();
+    this.setupEventListeners();
+  }
+
+  /**
+   * Handle complete reconnection failure
+   */
+  handleReconnectionFailed() {
+    console.error('❌ Reconnection failed');
+    this.isRecoveringSession = false;
+    
+    // Clear session data and redirect to landing
+    this.clearRoomSession();
+    this.returnToLanding();
+    
+    // Show connection failure message
+    this.showNotification('❌ Connection lost. Please check your internet and try again.', 'error');
+  }
+
+  /**
+   * Show notification to user
+   * @param {string} message 
+   * @param {string} type 
+   */
+  showNotification(message, type = 'info') {
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `notification notification-${type}`;
+    notification.innerHTML = `
+      <div class="notification-content">
+        <span>${message}</span>
+        <button class="notification-close" onclick="this.parentElement.parentElement.remove()">×</button>
+      </div>
+    `;
+    
+    // Add to page
+    document.body.appendChild(notification);
+    
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.remove();
+      }
+    }, 5000);
+  }
+
+  /**
+   * Save session data for recovery
+   * @param {string} roomCode 
+   * @param {string} username 
+   * @param {boolean} isHost 
+   */
+  saveSessionForRecovery(roomCode, username, isHost) {
+    this.socketClient.saveSessionData(roomCode, username, isHost);
   }
 
   // Utility method for future use
