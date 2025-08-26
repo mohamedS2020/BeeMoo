@@ -497,7 +497,7 @@ export class RoomView {
     const retryBtn = this.root.querySelector('#retry-movie');
     const verifyMicBtn = this.root.querySelector('#verify-mic');
     
-    changeBtn?.addEventListener('click', () => this.changeMovie());
+    changeBtn?.addEventListener('click', async () => await this.changeMovie());
     retryBtn?.addEventListener('click', () => this.retryMovie());
     verifyMicBtn?.addEventListener('click', () => this.verifyMicrophoneTracks());
   }
@@ -520,10 +520,10 @@ export class RoomView {
     });
   }
 
-  changeMovie() {
+  async changeMovie() {
     // Clean up existing video player
     if (this.videoPlayer) {
-      this.videoPlayer.destroy();
+      await this.videoPlayer.destroy();
       this.videoPlayer = null;
     }
     
@@ -543,7 +543,7 @@ export class RoomView {
   
   async retryMovie() {
     if (!this.selectedMovie) {
-      this.changeMovie();
+      await this.changeMovie();
       return;
     }
     
@@ -551,7 +551,7 @@ export class RoomView {
     
     // Clean up existing video player
     if (this.videoPlayer) {
-      this.videoPlayer.destroy();
+      await this.videoPlayer.destroy();
       this.videoPlayer = null;
     }
     
@@ -569,10 +569,10 @@ export class RoomView {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
-  unmount() {
+  async unmount() {
     if (this.participantList) this.participantList.destroy();
     if (this.movieFileSelector) this.movieFileSelector.destroy();
-    if (this.videoPlayer) this.videoPlayer.destroy();
+    if (this.videoPlayer) await this.videoPlayer.destroy();
     if (this.peerManager) this.peerManager.destroy();
     
     // Stop microphone health check
@@ -1436,7 +1436,7 @@ export class RoomView {
         break;
 
       case 'stop-streaming':
-        this.handleHostStoppedStreaming();
+        await this.handleHostStoppedStreaming();
         break;
 
       case 'sync':
@@ -1585,7 +1585,7 @@ export class RoomView {
     this.videoPlayer.syncWithHost('seek', syncState);
   }
 
-  handleHostStoppedStreaming() {
+  async handleHostStoppedStreaming() {
     console.log('⏹️ Host stopped streaming');
     
     // Stop video streaming if host
@@ -1599,7 +1599,7 @@ export class RoomView {
     
     // Clean up video player
     if (this.videoPlayer) {
-      this.videoPlayer.destroy();
+      await this.videoPlayer.destroy();
       this.videoPlayer = null;
     }
     
@@ -1638,28 +1638,28 @@ export class RoomView {
       this.socketClient.emit('leave-room');
       
       // Listen for server confirmation
-      this.socketClient.on('room-left', (data) => {
+      this.socketClient.on('room-left', async (data) => {
         console.log('✅ Server confirmed room left:', data);
-        this.performHardLeave();
+        await this.performHardLeave();
       });
 
       // Also handle errors
-      this.socketClient.on('leave-room-error', (error) => {
+      this.socketClient.on('leave-room-error', async (error) => {
         console.error('❌ Leave room error:', error);
         // Still perform hard leave even if server error
-        this.performHardLeave();
+        await this.performHardLeave();
       });
 
       // Fallback timeout - perform hard leave anyway after 3 seconds
-      setTimeout(() => {
+      setTimeout(async () => {
         console.log('⏰ Leave timeout - performing hard leave anyway');
-        this.performHardLeave();
+        await this.performHardLeave();
       }, 3000);
 
     } catch (error) {
       console.error('❌ Error during leave process:', error);
       // Still perform hard leave on error
-      this.performHardLeave();
+      await this.performHardLeave();
     }
   }
 
@@ -1739,11 +1739,11 @@ export class RoomView {
   /**
    * Perform complete hard leave - clear everything and go to landing
    */
-  performHardLeave() {
+  async performHardLeave() {
     console.log('🧹 Performing hard leave - clearing all data...');
 
     // Stop all ongoing activities
-    this.cleanup();
+    await this.cleanup();
 
     // Clear all local storage related to BeeMoo
     try {
@@ -1808,12 +1808,12 @@ export class RoomView {
   /**
    * Cleanup all resources and connections
    */
-  cleanup() {
+  async cleanup() {
     console.log('🧹 Cleaning up RoomView resources...');
 
     // Stop video player
     if (this.videoPlayer) {
-      this.videoPlayer.destroy();
+      await this.videoPlayer.destroy();
       this.videoPlayer = null;
     }
 

@@ -2071,10 +2071,10 @@ export class VideoPlayer {
   /**
    * Destroy subtitle manager
    */
-  destroy() {
+  async destroy() {
     // Cleanup streaming manager
     if (this.streamingManager) {
-      this.streamingManager.destroy();
+      await this.streamingManager.cleanup();
     }
     
     // Cleanup subtitle manager
