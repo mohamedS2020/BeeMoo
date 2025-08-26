@@ -48,6 +48,32 @@ export class SubtitleRenderer {
   }
 
   /**
+   * Get responsive bottom position for subtitles
+   */
+  getBottomPosition() {
+    if (this.settings.position !== 'bottom') return 'auto';
+    
+    // Check if video player is in fullscreen mode
+    const isFullscreen = document.fullscreenElement && 
+                         document.fullscreenElement.classList.contains('video-player');
+    
+    if (isFullscreen) {
+      return '90px'; // Fullscreen: largest controls
+    }
+    
+    // Check screen size for responsive positioning
+    const width = window.innerWidth;
+    
+    if (width <= 480) {
+      return '40px'; // Mobile: smaller controls
+    } else if (width <= 768) {
+      return '50px'; // Tablet: medium controls  
+    } else {
+      return '80px'; // Desktop: larger controls
+    }
+  }
+
+  /**
    * Apply responsive styles to subtitle element
    */
   applyStyles() {
@@ -56,8 +82,8 @@ export class SubtitleRenderer {
     const styles = {
       position: 'absolute',
       left: '50%',
-      bottom: this.settings.position === 'bottom' ? '10%' : 'auto',
-      top: this.settings.position === 'top' ? '10%' : 'auto',
+      bottom: this.getBottomPosition(),
+      top: this.settings.position === 'top' ? '20px' : 'auto',
       transform: 'translateX(-50%)',
       width: '90%',
       maxWidth: '800px',
@@ -210,11 +236,18 @@ export class SubtitleRenderer {
       }, 100);
     };
 
+    const handleFullscreenChange = () => {
+      // Update subtitle position when entering/exiting fullscreen
+      this.applyStyles();
+    };
+
     window.addEventListener('resize', handleResize);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
     
     // Cleanup function
     this.cleanup = () => {
       window.removeEventListener('resize', handleResize);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }
 

@@ -431,10 +431,19 @@ export class SubtitleManager {
   shareSubtitles(mode) {
     if (!this.isHost || !this.socketClient) {
       console.warn('⚠️ Cannot share subtitles: not host or no socket client');
+      console.log('🔍 Debug info:', {
+        isHost: this.isHost,
+        hasSocketClient: !!this.socketClient,
+        socketConnected: this.socketClient?.connected
+      });
       return;
     }
 
     console.log(`📤 Sharing subtitles with mode: ${mode}`);
+    console.log('🔍 Socket client info:', {
+      connected: this.socketClient.connected,
+      id: this.socketClient.id
+    });
 
     const subtitleData = {
       mode,
@@ -452,7 +461,12 @@ export class SubtitleManager {
     if (mode === 'all') {
       // Send subtitles to all participants
       console.log('📤 Emitting share-subtitles event to server');
-      this.socketClient.emit('share-subtitles', subtitleData);
+      
+      // Add error handling
+      this.socketClient.emit('share-subtitles', subtitleData, (response) => {
+        console.log('📤 Server response to share-subtitles:', response);
+      });
+      
       console.log('📤 Shared subtitles with all participants');
     } else {
       // Allow individual subtitle uploads

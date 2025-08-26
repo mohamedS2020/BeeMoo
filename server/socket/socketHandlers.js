@@ -543,22 +543,41 @@ class SocketHandlers {
    * @param {Object} data 
    */
   handleShareSubtitles(socket, data) {
+    console.log('📥 Received share-subtitles event from:', socket.id, 'with data:', {
+      mode: data?.mode,
+      hasSubtitles: !!data?.subtitles,
+      subtitleCount: data?.subtitles?.count
+    });
+    
     try {
       // Get user first, then room by roomCode
       const user = this.roomManager.getUser(socket.id);
       if (!user || !user.roomCode) {
+        console.error('❌ Share subtitles failed: User not in room');
         socket.emit('error', { message: 'Not in a room' });
         return;
       }
 
       const room = this.roomManager.getRoom(user.roomCode);
       if (!room) {
+        console.error('❌ Share subtitles failed: Room not found');
         socket.emit('error', { message: 'Room not found' });
         return;
       }
 
       // Verify sender is host
-      if (room.host !== socket.id) {
+      console.log('🔍 Host verification:', {
+        roomHost: room.hostSocketId,
+        socketId: socket.id,
+        isMatch: room.hostSocketId === socket.id,
+        roomData: {
+          id: room.roomCode,
+          participants: room.participants?.size || 0
+        }
+      });
+      
+      if (room.hostSocketId !== socket.id) {
+        console.error('❌ Share subtitles failed: Not host');
         socket.emit('error', { message: 'Only host can share subtitles' });
         return;
       }
@@ -571,10 +590,19 @@ class SocketHandlers {
 
       console.log(`📤 Host sharing subtitles in room ${user.roomCode}:`, {
         mode: data.mode,
-        subtitleCount: data.subtitles.count || 0
+        subtitleCount: data.subtitles.count || 0,
+        participantCount: room.participants.length
+      });
+
+      console.log(`🔍 Socket room info:`, {
+        hostSocketId: socket.id,
+        roomCode: user.roomCode,
+        hostInRoom: socket.rooms.has(user.roomCode),
+        socketRooms: Array.from(socket.rooms)
       });
 
       // Broadcast subtitles to all participants
+      console.log(`📡 Broadcasting subtitle-shared to room: ${user.roomCode}`);
       socket.to(user.roomCode).emit('subtitle-shared', {
         mode: data.mode,
         subtitles: data.subtitles,
@@ -616,7 +644,7 @@ class SocketHandlers {
       }
 
       // Verify sender is host
-      if (room.host !== socket.id) {
+      if (room.hostSocketId !== socket.id) {
         socket.emit('error', { message: 'Only host can manage subtitle permissions' });
         return;
       }
