@@ -38,6 +38,9 @@ class SocketHandlers {
     socket.on('webrtc-ice-candidate', (data) => this.handleWebRTCIceCandidate(socket, data));
     socket.on('ping', (data) => this.handlePing(socket, data));
     socket.on('time-sync-request', (data) => this.handleTimeSyncRequest(socket, data));
+    // Subtitle events
+    socket.on('share-subtitles', (data) => this.handleShareSubtitles(socket, data));
+    socket.on('allow-individual-subtitles', (data) => this.handleAllowIndividualSubtitles(socket, data));
     socket.on('disconnect', () => this.handleDisconnection(socket));
 
     // Send connection confirmation
@@ -532,6 +535,111 @@ class SocketHandlers {
    */
   getStats() {
     return this.roomManager.getStats();
+  }
+
+  /**
+   * Handle subtitle sharing from host to participants
+   * @param {Socket} socket 
+   * @param {Object} data 
+   */
+  handleShareSubtitles(socket, data) {
+    try {
+      // Get user first, then room by roomCode
+      const user = this.roomManager.getUser(socket.id);
+      if (!user || !user.roomCode) {
+        socket.emit('error', { message: 'Not in a room' });
+        return;
+      }
+
+      const room = this.roomManager.getRoom(user.roomCode);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      // Verify sender is host
+      if (room.host !== socket.id) {
+        socket.emit('error', { message: 'Only host can share subtitles' });
+        return;
+      }
+
+      // Validate subtitle data
+      if (!data || !data.subtitles) {
+        socket.emit('error', { message: 'Invalid subtitle data' });
+        return;
+      }
+
+      console.log(`📤 Host sharing subtitles in room ${user.roomCode}:`, {
+        mode: data.mode,
+        subtitleCount: data.subtitles.count || 0
+      });
+
+      // Broadcast subtitles to all participants
+      socket.to(user.roomCode).emit('subtitle-shared', {
+        mode: data.mode,
+        subtitles: data.subtitles,
+        settings: data.settings,
+        timestamp: data.timestamp,
+        hostId: socket.id
+      });
+
+      // Confirm to host
+      socket.emit('subtitle-share-confirmed', {
+        success: true,
+        participantCount: room.participants.length
+      });
+
+    } catch (error) {
+      console.error('❌ Error sharing subtitles:', error);
+      socket.emit('error', { message: 'Failed to share subtitles' });
+    }
+  }
+
+  /**
+   * Handle host allowing individual subtitle uploads
+   * @param {Socket} socket 
+   * @param {Object} data 
+   */
+  handleAllowIndividualSubtitles(socket, data) {
+    try {
+      // Get user first, then room by roomCode  
+      const user = this.roomManager.getUser(socket.id);
+      if (!user || !user.roomCode) {
+        socket.emit('error', { message: 'Not in a room' });
+        return;
+      }
+
+      const room = this.roomManager.getRoom(user.roomCode);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      // Verify sender is host
+      if (room.host !== socket.id) {
+        socket.emit('error', { message: 'Only host can manage subtitle permissions' });
+        return;
+      }
+
+      console.log(`🔓 Host allowing individual subtitles in room ${user.roomCode}`);
+
+      // Notify all participants they can upload individual subtitles
+      socket.to(user.roomCode).emit('subtitle-individual-allowed', {
+        allowed: data.allowed,
+        hostId: socket.id,
+        timestamp: new Date().toISOString()
+      });
+
+      // Confirm to host
+      socket.emit('subtitle-permission-confirmed', {
+        success: true,
+        participantCount: room.participants.length
+      });
+
+    } catch (error) {
+      console.error('❌ Error managing subtitle permissions:', error);
+      socket.emit('error', { message: 'Failed to manage subtitle permissions' });
+    }
   }
 
   /**

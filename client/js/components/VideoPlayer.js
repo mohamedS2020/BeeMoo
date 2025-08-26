@@ -3,6 +3,7 @@
 
 import { ShakaStreamingManager } from '../utils/shakaStreaming.js';
 import { SynchronizationManager } from '../utils/synchronization.js';
+import { SubtitleManager } from './SubtitleManager.js';
 
 // Import Shaka Player for error handling
 let shaka = null;
@@ -16,6 +17,7 @@ export class VideoPlayer {
     this.onStateChange = onStateChange; // Callback for state changes
     this.streamingManager = new ShakaStreamingManager();
     this.syncManager = new SynchronizationManager(socketClient);
+    this.subtitleManager = null; // Will be initialized after container setup
     this.container = null;
     this.videoElement = null;
     this.controlsContainer = null;
@@ -198,6 +200,9 @@ export class VideoPlayer {
       this.isInitialized = true;
       this.updatePlayerState();
       
+      // Initialize subtitle manager after video is ready
+      this.initializeSubtitleManager();
+      
       console.log('✅ Video player initialized successfully:', {
         duration: this.duration,
         width: this.videoElement.videoWidth,
@@ -251,6 +256,8 @@ export class VideoPlayer {
     this.duration = movieState.duration || 0;
     this.currentTime = movieState.currentTime || 0;
     
+    console.log('🔄 Participant duration set to:', this.duration, 'from movieState');
+    
     // Create player UI
     this.createPlayerElements();
     this.setupEventListeners();
@@ -263,6 +270,9 @@ export class VideoPlayer {
     
     this.isInitialized = true;
     this.updatePlayerState();
+    
+    // Initialize subtitle manager for participants too
+    this.initializeSubtitleManager();
     
     console.log('✅ Participant video player initialized with metadata:', {
       duration: this.duration,
@@ -401,6 +411,13 @@ export class VideoPlayer {
     
     // Update participant movie state with latest data
     this.participantMovieState = { ...this.participantMovieState, ...movieState };
+    
+    // Update duration if we have a valid one from host
+    if (movieState.duration && movieState.duration > 0) {
+      console.log(`🔄 Participant updating duration from host: ${this.duration} → ${movieState.duration}`);
+      this.duration = movieState.duration;
+      this.updateTimeDisplay();
+    }
     
     // Check if we have a real WebRTC video stream or virtual mode
     const hasWebRTCStream = this.videoElement && 
@@ -869,12 +886,20 @@ export class VideoPlayer {
     
     this.videoElement.addEventListener('durationchange', () => {
       console.log('🎬 Video duration changed:', this.videoElement.duration);
-      if (this.videoElement.duration && !isNaN(this.videoElement.duration)) {
+      
+      // For participants, preserve the synced duration from host
+      // Don't override with WebRTC stream's Infinity duration
+      if (!this.isHost && this.participantMovieState && this.participantMovieState.duration) {
+        console.log('🔄 Participant: Preserving synced duration:', this.participantMovieState.duration, 'instead of WebRTC duration:', this.videoElement.duration);
+        this.duration = this.participantMovieState.duration;
+      } else if (this.videoElement.duration && !isNaN(this.videoElement.duration) && this.videoElement.duration !== Infinity) {
+        // For hosts or when we have a valid finite duration
         this.duration = this.videoElement.duration;
-        this.updateTimeDisplay();
-        this.hideLoadingOverlay();
-        this.hideError(); // Hide error when duration is available
       }
+      
+      this.updateTimeDisplay();
+      this.hideLoadingOverlay();
+      this.hideError(); // Hide error when duration is available
     });
     
     this.videoElement.addEventListener('play', () => {
@@ -2044,6 +2069,61 @@ export class VideoPlayer {
   }
   
   /**
+   * Destroy subtitle manager
+   */
+  destroy() {
+    // Cleanup streaming manager
+    if (this.streamingManager) {
+      this.streamingManager.destroy();
+    }
+    
+    // Cleanup subtitle manager
+    if (this.subtitleManager) {
+      this.subtitleManager.destroy();
+      this.subtitleManager = null;
+    }
+    
+    // Stop any participant timers
+    this.stopParticipantTimer();
+    
+    // Remove event listeners
+    if (this.videoCleanup) {
+      this.videoCleanup();
+    }
+    
+    // Clear intervals and timeouts
+    if (this.controlsTimer) {
+      clearTimeout(this.controlsTimer);
+    }
+    
+    console.log('🧹 Video player destroyed');
+  }
+
+  /**
+   * Exit virtual mode and prepare for real video stream
+   */
+  exitVirtualMode() {
+    console.log('🚪 Exiting virtual mode for real video stream');
+    
+    // Hide loading overlay to show real video
+    this.hideLoadingOverlay();
+    
+    // Stop virtual timer
+    this.stopParticipantTimer();
+    
+    // Clear virtual player state
+    this.participantMovieState = null;
+    
+    // Enable video element for stream
+    if (this.videoElement) {
+      this.videoElement.style.display = 'block';
+      this.videoElement.style.visibility = 'visible';
+    }
+    
+    console.log('✅ Virtual mode exited - ready for real video stream');
+  }
+
+  /**
    * Ensure volume controls work properly for WebRTC streams
    */
   ensureVolumeControlsWork() {
@@ -2060,6 +2140,43 @@ export class VideoPlayer {
       this.updateVolumeControls();
       
       console.log(`✅ Volume controls ensured: element=${Math.round(this.videoElement.volume * 100)}%, muted=${this.videoElement.muted}`);
+    }
+  }
+
+  /**
+   * Initialize subtitle manager
+   */
+  initializeSubtitleManager() {
+    if (this.subtitleManager) {
+      this.subtitleManager.destroy();
+    }
+    
+    try {
+      this.subtitleManager = new SubtitleManager(
+        this,
+        this.socketClient,
+        this.isHost
+      );
+      console.log('✅ Subtitle manager initialized');
+    } catch (error) {
+      console.error('❌ Failed to initialize subtitle manager:', error);
+    }
+  }
+
+  /**
+   * Get subtitle manager instance
+   */
+  getSubtitleManager() {
+    return this.subtitleManager;
+  }
+
+  /**
+   * Set host status and update subtitle manager
+   */
+  setHostStatus(isHost) {
+    this.isHost = isHost;
+    if (this.subtitleManager) {
+      this.subtitleManager.isHost = isHost;
     }
   }
 }

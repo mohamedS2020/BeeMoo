@@ -21,6 +21,7 @@ export class RoomView {
     this.isHost = false;
     this.selectedMovie = null;
     this.movieState = 'none'; // 'none', 'selecting', 'loading', 'ready', 'playing'
+    this.pendingHostVideoStream = null; // Store video stream if received before VideoPlayer is ready
 
   // Remote host media combination for participants
   this.remoteHostVideoStream = null; // MediaStream with video (+ possibly video audio)
@@ -188,19 +189,14 @@ export class RoomView {
       const isFromHost = !!hostPeerId && peerId === hostPeerId;
       if (!this.isHost && isFromHost) {
         console.log(`🎥 Participant received host video stream - attaching directly`);
+        
+        // Store stream for later attachment if VideoPlayer not ready
+        this.pendingHostVideoStream = stream;
+        
         if (this.videoPlayer && this.videoPlayer.videoElement) {
-          // Exit virtual mode if needed
-          if (typeof this.videoPlayer.exitVirtualMode === 'function') {
-            this.videoPlayer.exitVirtualMode();
-          }
-          
-          // Attach video stream directly to video element
-          this.videoPlayer.videoElement.srcObject = stream;
-          this.videoPlayer.videoElement.autoplay = true;
-          this.videoPlayer.videoElement.playsInline = true;
-          this.videoPlayer.videoElement.setAttribute('data-webrtc', 'true');
-          
-          console.log(`✅ Participant video stream attached directly`);
+          this.attachHostVideoStream(stream);
+        } else {
+          console.log(`📦 Storing host video stream for later attachment`);
         }
         return;
       }
@@ -863,6 +859,12 @@ export class RoomView {
     const videoElement = this.videoPlayer?.videoElement;
     const streamingStats = this.videoPlayer?.streamingManager?.getStats();
     
+    console.log('🔍 Getting video metadata:', {
+      hasVideoElement: !!videoElement,
+      videoDuration: videoElement?.duration,
+      videoReadyState: videoElement?.readyState
+    });
+    
     const metadata = {
       // Basic file information
       title: movieData.name,
@@ -1505,6 +1507,13 @@ export class RoomView {
         
         console.log('✅ Participant video player initialized');
         
+        // Check if we have a pending video stream to attach
+        if (this.pendingHostVideoStream) {
+          console.log('📦 Attaching pending host video stream');
+          this.attachHostVideoStream(this.pendingHostVideoStream);
+          this.pendingHostVideoStream = null;
+        }
+        
       } catch (error) {
         console.error('❌ Failed to initialize participant video player:', error);
         this.movieState = 'error';
@@ -2104,5 +2113,30 @@ export class RoomView {
       return result;
     }
     console.warn('⚠️ No peer manager available');
+  }
+
+  /**
+   * Attach host video stream to participant video player
+   */
+  attachHostVideoStream(stream) {
+    if (!this.videoPlayer || !this.videoPlayer.videoElement) {
+      console.warn('⚠️ Cannot attach stream: VideoPlayer not ready');
+      return;
+    }
+
+    console.log('🔗 Attaching host video stream to participant');
+    
+    // Exit virtual mode if needed
+    if (typeof this.videoPlayer.exitVirtualMode === 'function') {
+      this.videoPlayer.exitVirtualMode();
+    }
+    
+    // Attach video stream directly to video element
+    this.videoPlayer.videoElement.srcObject = stream;
+    this.videoPlayer.videoElement.autoplay = true;
+    this.videoPlayer.videoElement.playsInline = true;
+    this.videoPlayer.videoElement.setAttribute('data-webrtc', 'true');
+    
+    console.log('✅ Host video stream attached to participant');
   }
 }
