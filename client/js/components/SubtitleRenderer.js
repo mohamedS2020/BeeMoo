@@ -24,8 +24,8 @@ export class SubtitleRenderer {
    * Initialize subtitle display element
    */
   init() {
-    this.createSubtitleElement();
     this.setupResponsiveHandling();
+    // Don't create element until needed
   }
 
   /**
@@ -158,10 +158,15 @@ export class SubtitleRenderer {
    * Display subtitle text
    */
   displaySubtitle(subtitle) {
-    if (!this.subtitleElement) return;
-
     const text = subtitle?.text || '';
     
+    // Create element only when we have text to show
+    if (text && !this.subtitleElement) {
+      this.createSubtitleElement();
+    }
+    
+    if (!this.subtitleElement) return;
+
     // Only update if text changed
     if (this.currentText === text) return;
     
