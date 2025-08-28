@@ -11,6 +11,15 @@ dist/
 .env
 .env.local
 .env.production
+server/.env
+
+# Analytics System
+server/analytics/beemoo_analytics.db*
+server/analytics.db*
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Logs
 *.log
@@ -19,3 +28,8 @@ npm-debug.log*
 # Coverage
 coverage/
 .nyc_output
+
+# Analytics exports and reports
+server/exports/
+server/reports/
+server/logs/

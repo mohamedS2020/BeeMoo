@@ -14,6 +14,10 @@
     "test": "npm run server:test && npm run client:test",
     "server:test": "cd server && npm test",
     "client:test": "cd client && npm test",
+    "load-test": "node tests/load-test.js",
+    "load-test:local": "node tests/load-test.js http://localhost:3001 10",
+    "load-test:prod": "node tests/load-test.js https://beemoo-server.fly.dev 10",
+    "stress-test": "node tests/load-test.js https://beemoo-server.fly.dev 25",
     "clean": "npm run clean:server && npm run clean:client",
     "clean:server": "cd server && rm -rf node_modules dist",
     "clean:client": "cd client && rm -rf node_modules dist",
@@ -41,6 +45,7 @@
   "homepage": "https://github.com/mohamedS2020/BeeMoo#readme",
   "devDependencies": {
     "concurrently": "^9.2.0",
-    "cross-env": "^10.0.0"
+    "cross-env": "^10.0.0",
+    "socket.io-client": "^4.8.1"
   }
 }

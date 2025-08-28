@@ -1,9 +1,14 @@
 const RoomManager = require('./roomManager');
+const AnalyticsManager = require('../analytics/manager');
 
 class SocketHandlers {
   constructor(io) {
     this.io = io;
     this.roomManager = new RoomManager();
+    this.analytics = new AnalyticsManager();
+    
+    // Start analytics system (async)
+    this.initializeAnalytics();
     
     // Bind methods to preserve 'this' context
     this.handleConnection = this.handleConnection.bind(this);
@@ -16,6 +21,17 @@ class SocketHandlers {
     this.handleChatMessage = this.handleChatMessage.bind(this);
     this.handleDisconnection = this.handleDisconnection.bind(this);
     this.handlePing = this.handlePing.bind(this);
+  }
+
+  /**
+   * Initialize analytics system asynchronously
+   */
+  async initializeAnalytics() {
+    try {
+      await this.analytics.start();
+    } catch (error) {
+      console.error('❌ Failed to start analytics system:', error);
+    }
   }
 
   /**
@@ -101,6 +117,12 @@ class SocketHandlers {
         // Join socket to room for broadcasting
         socket.join(result.roomCode);
         
+        // Record analytics event
+        this.analytics.recordEvent('room_created', result.roomCode, username, {
+          socketId: socket.id,
+          timestamp: new Date().toISOString()
+        });
+        
         socket.emit('room-created', {
           roomCode: result.roomCode,
           room: result.room,
@@ -136,6 +158,13 @@ class SocketHandlers {
       if (result.success) {
         // Join socket to room for broadcasting
         socket.join(result.roomCode);
+        
+        // Record analytics event
+        this.analytics.recordEvent('user_joined', result.roomCode, username, {
+          socketId: socket.id,
+          participantCount: result.participants?.length || 0,
+          timestamp: new Date().toISOString()
+        });
         
         // Notify the joining user
         socket.emit('room-joined', {
@@ -454,6 +483,15 @@ class SocketHandlers {
       const result = this.roomManager.updateMovieState(socket.id, updateData);
       
       if (result.success) {
+        // Record analytics for movie events
+        if (action === 'start-streaming') {
+          this.analytics.recordEvent('movie_started', result.roomCode, user.username, {
+            movieTitle: movieState?.title || 'Unknown Movie',
+            socketId: socket.id,
+            timestamp: new Date().toISOString()
+          });
+        }
+        
         // Notify all participants in the room about movie state change with precision timing
         const precisionTimestamp = Date.now();
         this.io.to(result.roomCode).emit('movie-sync', {
@@ -803,6 +841,10 @@ class SocketHandlers {
   shutdown() {
     if (this.roomManager) {
       this.roomManager.stopCleanupTimer();
+    }
+    
+    if (this.analytics) {
+      this.analytics.shutdown();
     }
   }
 }

@@ -2,10 +2,18 @@
 // Modern ES Module Structure
 
 import { App } from './app.js';
+import { inject } from '@vercel/analytics';
+import { injectSpeedInsights } from '@vercel/speed-insights';
 
 // Initialize the BeeMoo application
 document.addEventListener('DOMContentLoaded', () => {
   console.log('🎬 BeeMoo - Movie Party Meetings Platform');
+  
+  // Initialize Vercel Analytics
+  inject();
+  
+  // Initialize Vercel Speed Insights
+  injectSpeedInsights();
   
   // Initialize the main application
   const app = new App();

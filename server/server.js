@@ -1,3 +1,6 @@
+// Load environment variables
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const { createServer } = require('http');
@@ -88,6 +91,64 @@ app.get('/api/stats', (req, res) => {
     service: 'BeeMoo Server',
     timestamp: new Date().toISOString(),
     stats: stats
+  });
+});
+
+// Analytics endpoints
+app.get('/api/analytics', async (req, res) => {
+  try {
+    const analytics = await socketHandlers.analytics.getCurrentStats();
+    res.json({
+      status: 'OK',
+      service: 'BeeMoo Analytics',
+      timestamp: new Date().toISOString(),
+      analytics: analytics
+    });
+  } catch (error) {
+    console.error('Analytics API error:', error);
+    res.status(500).json({
+      status: 'Error',
+      message: 'Failed to retrieve analytics'
+    });
+  }
+});
+
+// Manual report generation endpoint (for testing)
+app.post('/api/analytics/report/:type', async (req, res) => {
+  try {
+    const { type } = req.params;
+    
+    if (!['weekly', 'monthly', 'test'].includes(type)) {
+      return res.status(400).json({
+        status: 'Error',
+        message: 'Invalid report type. Use: weekly, monthly, or test'
+      });
+    }
+    
+    await socketHandlers.analytics.generateManualReport(type);
+    
+    res.json({
+      status: 'OK',
+      message: `${type} report generation initiated`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Manual report error:', error);
+    res.status(500).json({
+      status: 'Error',
+      message: 'Failed to generate report'
+    });
+  }
+});
+
+// Get analytics configuration (for debugging)
+app.get('/api/analytics/config', (req, res) => {
+  res.json({
+    emailConfigured: !!(process.env.EMAIL_USER && process.env.EMAIL_PASS),
+    emailUser: process.env.EMAIL_USER || 'Not configured',
+    reportEmail: process.env.REPORT_EMAIL || 'Not configured',
+    environment: process.env.NODE_ENV || 'development',
+    timestamp: new Date().toISOString()
   });
 });
 
