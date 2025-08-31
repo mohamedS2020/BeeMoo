@@ -1,9 +1,20 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 
 class AnalyticsDatabase {
   constructor() {
-    const dbPath = path.join(__dirname, 'beemoo_analytics.db');
+    // Use persistent volume in production, local path in development
+    const dataDir = process.env.NODE_ENV === 'production' ? '/app/data' : __dirname;
+    
+    // Ensure directory exists
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    
+    const dbPath = path.join(dataDir, 'beemoo_analytics.db');
+    console.log(`📊 Database path: ${dbPath}`);
+    
     this.db = new sqlite3.Database(dbPath, (err) => {
       if (err) {
         console.error('❌ Analytics database connection error:', err);
