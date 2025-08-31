@@ -105,7 +105,7 @@ class EmailReporter {
       topUsers,
       peakHours,
       techStats,
-      insights: this.generateInsights(currentWeekData, dailyBreakdown, topUsers),
+      insights: this.generateInsights(currentWeekData, dailyBreakdown, topUsers, peakHours),
       generatedAt: new Date().toLocaleString()
     };
   }
@@ -329,7 +329,7 @@ class EmailReporter {
   async getPeakHours(startDate, endDate, limit = 5) {
     const query = `
       SELECT 
-        CAST(strftime('%H', timestamp) AS INTEGER) as hour,
+        CAST(strftime('%H', datetime(timestamp, '+2 hours')) AS INTEGER) as hour,
         COUNT(*) as events
       FROM analytics_events 
       WHERE timestamp >= ? AND timestamp <= ?
@@ -340,7 +340,7 @@ class EmailReporter {
     
     const results = await this.dbAll(query, [startDate.toISOString(), endDate.toISOString(), limit]);
     return results.map(row => ({
-      hour: `${row.hour.toString().padStart(2, '0')}:00`,
+      hour: `${row.hour.toString().padStart(2, '0')}:00 EET`,
       events: row.events
     }));
   }
@@ -446,7 +446,7 @@ class EmailReporter {
   /**
    * Generate insights for weekly report
    */
-  generateInsights(currentWeek, dailyBreakdown, topUsers) {
+  generateInsights(currentWeek, dailyBreakdown, topUsers, peakHours) {
     const insights = [];
     
     // Weekend usage analysis
@@ -467,8 +467,17 @@ class EmailReporter {
       (currentWeek.usersJoined / currentWeek.roomsCreated).toFixed(1) : 0;
     insights.push(`User Retention: Average ${avgUsers} users per room`);
     
-    // Peak activity
-    insights.push(`Peak Hours: 6 PM - 11 PM accounts for 65% of activity`);
+    if (topUsers && topUsers.length > 0) {
+        insights.push(`Most Active User: ${topUsers[0].username} with ${topUsers[0].activity_count} total activities`);
+    }
+    // Peak activity - use real data instead of hardcoded
+    if (peakHours && peakHours.length > 0) {
+      const topHour = peakHours[0].hour;
+      const topEvents = peakHours[0].events;
+      insights.push(`Peak Hours: ${topHour} with ${topEvents} events (Egypt Time)`);
+    } else {
+      insights.push(`Peak Hours: No activity data available yet`);
+    }
     
     return insights;
   }
