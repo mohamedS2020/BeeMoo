@@ -541,6 +541,17 @@ class EmailReporter {
   }
 
   /**
+   * Parse multiple email addresses from environment variable
+   */
+  parseEmailRecipients() {
+    const emailEnv = process.env.REPORT_EMAIL || process.env.EMAIL_USER;
+    if (!emailEnv) return [];
+    
+    // Split by comma and clean up whitespace
+    return emailEnv.split(',').map(email => email.trim()).filter(email => email.length > 0);
+  }
+
+  /**
    * Send report email
    */
   async sendReport(reportData, reportType) {
@@ -554,17 +565,26 @@ class EmailReporter {
     
     const emailHtml = this.generateReportHTML(reportData);
     const emailText = this.generateReportText(reportData);
+    
+    // Get multiple email recipients
+    const recipients = this.parseEmailRecipients();
+    
+    if (recipients.length === 0) {
+      console.warn('⚠️ No email recipients configured');
+      return;
+    }
 
     const mailOptions = {
       from: process.env.EMAIL_USER,
-      to: process.env.REPORT_EMAIL || process.env.EMAIL_USER,
+      to: recipients.join(', '), // Multiple recipients separated by comma
       subject: `📊 BeeMoo ${reportType} Report - ${reportData.startDate} to ${reportData.endDate}`,
       text: emailText,
       html: emailHtml
     };
 
     const info = await this.transporter.sendMail(mailOptions);
-    console.log(`✅ ${reportType} report sent:`, info.messageId);
+    console.log(`✅ ${reportType} report sent to ${recipients.length} recipient(s):`, info.messageId);
+    console.log(`📧 Recipients: ${recipients.join(', ')}`);
   }
 
   /**
